@@ -79,10 +79,11 @@ bool functionActive = false;           // Bandera para saber si la funcion está
 bool useWiFi = false;                  // Control del uso del Servidor WIFI
 bool useEthe = false;                  // Control del uso del Servidor Ethernet
 
+// VARIABLES MOTOR
 // Parámetros del movimiento
 float amplitude = 15.0;                          // Amplitud en mm
 float freq_ang = 0.16 * (2 * PI);                // Frecuencia (Velocidad Angular) 6 -> 2 * PI
-const float freq_ang_max = 1.0 * (2 * PI);       // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
+const float freq_ang_max = 3.0 * (2 * PI);       // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
 const float stepsPerMM = 50.0;                   // Paso por Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
 int stepsForAmplitude = amplitude * stepsPerMM;  // Pasos correspondientes a la amplitud
 const float distCentro = 25.0;                   // Distancia hacia el centro en mm
@@ -107,10 +108,6 @@ String getFunctionName(int select) {
     default: return "NO MOD";
   }
 }
-
-// VARIABLES MOTOR
-int stepsPerRevolution = 10000;
-int stepDelay = 5;
 
 void setup() {
   Serial.begin(9600);
@@ -327,7 +324,7 @@ void controlManual() {
     int potAmpValue = Breakout.analogRead(analogPins[potAmp]);
     int potFreValue = Breakout.analogRead(analogPins[potFre]);
 
-    int amplitud_in = map(potAmpValue, 0, POT_MAX, 0, 20);
+    int amplitud_in = map(potAmpValue, 0, POT_MAX, 0, 50);
     float frecuencia_in = (potFreValue / 1023.0) * 5.0;
 
     freq_ang = frecuencia_in * 6.28;
@@ -340,6 +337,13 @@ void controlManual() {
     // clearRow(3, 5, "Hz");
     // lcd.setCursor(0, 3);
     // lcd.print(frecuencia_in, 2);
+
+    Serial.print("Amplitud: ");
+    Serial.print(amplitud_in);
+    Serial.print(" mm ");
+    Serial.print(" Frecuencia: ");
+    Serial.println(frecuencia_in);
+    Serial.print(" Hz");
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
