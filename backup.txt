@@ -1,0 +1,673 @@
+#include <LiquidCrystal_I2C.h>
+#include <Arduino_PortentaBreakout.h>
+
+#include <SPI.h>
+#include <PortentaEthernet.h>
+#include <Ethernet.h>
+#include <WiFi.h>
+
+#include "SDMMCBlockDevice.h"
+#include "FATFileSystem.h"
+#include "mbed.h"
+#include "platform/mbed_retarget.h"
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);  // 0x3f or 0x27
+
+// Configuración de la tarjeta SD
+SDMMCBlockDevice sd;
+mbed::FATFileSystem fs("fs");
+
+// CONEXION ETHERNET
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(192, 168, 1, 170);  //Direccion IP por defecto
+EthernetServer server(80);       //Habilitar puerto 80
+
+// CONEXION WIFI
+char ssid[] = "NCN_MESA_01";  // your network SSID (name)
+char pass[] = "mesamesa";     // Contraseña WIFI
+int keyIndex = 0;             // Flag para usar WEP
+
+int status = WL_IDLE_STATUS;  // Estado del WIFI
+
+IPAddress apIP(192, 168, 1, 160);      // IP del punto de acceso
+IPAddress apGateway(192, 168, 1, 1);   // Puerta de enlace
+IPAddress apSubnet(255, 255, 255, 0);  // Máscara de subred
+WiFiServer wi_server(80);
+
+// PINES DE PORTENTA BREAKOUT
+breakoutPin pwmPins[] = { PWM0, PWM1, PWM2, PWM3, PWM4, PWM5, PWM6, PWM7, PWM8, PWM9 };
+breakoutPin analogPins[] = { ANALOG_A0, ANALOG_A1, ANALOG_A2, ANALOG_A3, ANALOG_A4, ANALOG_A5, ANALOG_A6, ANALOG_A7 };
+breakoutPin gpioPins[] = { GPIO_0, GPIO_1, GPIO_2, GPIO_3, GPIO_4, GPIO_5, GPIO_6 };
+
+// DEFINIR VALOR MIN Y MAX DEL POTENCIOMETRO
+#define POT_MIN 0
+#define POT_MAX 1023
+
+// PINES MOTOR
+byte dirPin = 7;
+byte stepPin = 8;
+byte freePin = 9;
+
+// PINES CONTROL MANUAL MOTOR
+byte potAmp = 7;
+byte potFre = 6;
+
+//PIN DE CONTROL
+byte potSel = 5;  // -- BORRAR
+byte btnSel = 5;
+
+//VARIABLES SELECCION MODO
+int previousSelect = -1;                    // Variable para almacenar la seleccion anterior  -- BORRAR
+unsigned long lastChangeTime = 0;           // Tiempo en el que se detecto el último cambio   -- BORRAR
+const unsigned long debounceDelay = 100;    // Tiempo de rebote para detectar cambios         -- BORRAR
+const unsigned long selectionDelay = 5000;  // Tiempo de espera  (5 segundos)
+const unsigned long clickTimeout = 500;     // Tiempo máximo entre clics en ms                -- BORRAR
+
+int buttonState = 0;
+int lastButtonState = 0;
+int clickCount = 0;
+
+unsigned long startTime;
+unsigned long elapsedTime = 5000;   // Tiempo en milisegundos (5 segundos en este caso)
+unsigned long clickStartTime;       // Tiempo de inicio del clic
+bool functionReady = false;         // Bandera para saber si la función está lista para ejecutarse   -- BORRAR
+bool waitingForButtonPress = true;  // Esperando el botón                                            -- BORRAR
+
+bool isCountingDown = false;           // Bandera para saber si el conteo regresivo está en marcha
+unsigned long countdownStartTime = 0;  // Tiempo en el que comenzo el conteo regresivo
+bool functionActive = false;           // Bandera para saber si la funcion está activa
+bool useWiFi = false;                  // Control del uso del Servidor WIFI
+bool useEthe = false;                  // Control del uso del Servidor Ethernet
+
+String getFunctionName(int select) {
+  switch (select) {
+    case 0: return "Modo MANUAL";
+    case 1: return "Modo WIFI";
+    case 2: return "Modo USB";
+    case 3: return "Modo RED";
+    default: return "NO MOD";
+  }
+}
+
+// VARIABLES MOTOR
+int stepsPerRevolution = 10000;
+int stepDelay = 5;
+
+void setup() {
+  Serial.begin(9600);
+
+  // Inicializa la tarjeta SD
+  int err = sd.init();
+
+  pinMode(pwmPins[btnSel], INPUT);
+  startTime = millis();
+
+  if (err) {
+    Serial.print("Error SD");
+    while (true) {
+      delay(1);
+    }
+  }
+
+  err = fs.mount(&sd);
+
+  if (err) {
+    Serial.print("Error FS");
+    while (true) {
+      delay(1);
+    }
+  }
+
+  pinMode(pwmPins[dirPin], OUTPUT);
+  pinMode(pwmPins[stepPin], OUTPUT);
+  pinMode(pwmPins[freePin], OUTPUT);
+
+  Breakout.digitalWrite(pwmPins[freePin], HIGH);
+
+  lcd.init();
+
+  lcd.backlight();
+  lcd.setCursor(5, 1);
+  lcd.print("Powered By NCN!");
+
+  delay(2000);
+  lcd.clear();
+
+  lcd.setCursor(5, 1);
+  lcd.print("Seleccionar");
+  lcd.setCursor(8, 2);
+  lcd.print("Modo");
+  delay(2000);
+}
+
+
+void loop() {
+
+  int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+
+  if (buttonState == HIGH && lastButtonState == LOW) {
+    clickCount++;
+    lcd.clear();
+
+    clickStartTime = millis();
+    countdownStartTime = millis();
+
+    functionActive = false;
+    isCountingDown = true;
+
+    if (clickCount >= 4) {
+      clickCount = 0;
+    }
+  }
+
+  if (buttonState == LOW && lastButtonState == HIGH) {}  //Evento de liberación del botón.
+
+  lastButtonState = buttonState;
+
+  if (isCountingDown) {
+    unsigned long elapsedTime = millis() - countdownStartTime;
+    unsigned long timeLeft = selectionDelay - elapsedTime;
+
+    lcd.setCursor(5, 1);
+    lcd.print(getFunctionName(clickCount));
+    lcd.setCursor(7, 2);
+    lcd.print(timeLeft / 1000);
+    lcd.setCursor(9, 2);
+    lcd.print("seg.");
+
+    if (elapsedTime % 1000 == 0) { ; }
+
+    if (elapsedTime >= selectionDelay) {
+
+      isCountingDown = false;
+      functionActive = true;
+
+      if (clickCount == 0) {
+        lcd.clear();
+        controlManual();
+      } else if (clickCount == 1) {
+        lcd.clear();
+        modoWifi();
+      } else if (clickCount == 2) {
+        lcd.clear();
+        modoUSB();
+      } else if (clickCount == 3) {
+        lcd.clear();
+        modoEthernet();
+      }
+    }
+  }
+
+  delay(100);
+}
+
+void controlManual() {
+
+  lcd.setCursor(0, 0);
+  lcd.print("Amplitud: ");
+  lcd.setCursor(4, 1);
+  lcd.print("mm");
+  lcd.setCursor(0, 2);
+  lcd.print("Frecuencia: ");
+  lcd.setCursor(7, 3);
+  lcd.print("Hz");
+
+  while (functionActive) {
+
+    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+
+    if (buttonState == HIGH && lastButtonState == LOW) {
+      functionActive = false;
+      break;
+    }
+
+    lastButtonState = buttonState;
+
+    int potAmpValue = Breakout.analogRead(analogPins[potAmp]);
+    int potFreValue = Breakout.analogRead(analogPins[potFre]);
+
+    int distancia = map(potAmpValue, 0, POT_MAX, 0, 20);
+    float aceleracion = map(potFreValue, 0, POT_MAX, 0, 100);
+
+    lcd.setCursor(0, 1);
+    lcd.print(distancia);
+
+    lcd.setCursor(0, 3);
+    lcd.print(aceleracion);
+
+    delay(100);
+  }
+}
+
+void modoWifi() {
+  WiFi.config(apIP, apGateway, apSubnet);  // Establecer IP WIFI server
+
+  lcd.setCursor(5, 1);
+  lcd.print("Modo WIFI");
+  delay(5000);
+  lcd.clear();
+
+  WiFi.beginAP(ssid, pass);
+
+  int attempts = 0;
+
+  lcd.setCursor(7, 1);
+  lcd.print("Espere");
+
+  while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+    delay(500);
+    lcd.setCursor(attempts + 5, 2);
+    lcd.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    lcd.setCursor(4, 1);
+    lcd.print("No se pudo conectar");
+    lcd.setCursor(4, 2);
+    lcd.print(" Wi-Fi");
+  }
+
+  wi_server.begin();
+  lcd.clear();
+
+  lcd.setCursor(6, 0);
+  lcd.print("IP WI-FI");
+  lcd.setCursor(3, 1);
+  lcd.print(WiFi.localIP());
+  lcd.setCursor(7, 2);
+  lcd.print("SSID");
+  lcd.setCursor(4, 3);
+  lcd.print(ssid);
+
+  while (functionActive) {
+
+    // int potSelValue = Breakout.analogRead(analogPins[potSel]);
+    // int select = map(potSelValue, POT_MIN, POT_MAX, 0, 3);
+
+    // // Modo WIFI = 1
+    // if (select != 1) {
+    //   functionActive = false;
+    //   //WiFi.disconnect();
+    //   lcd.clear();
+    //   lcd.setCursor(4, 1);
+    //   lcd.print("Funcion");
+    //   lcd.setCursor(5, 2);
+    //   lcd.print("Detenida");
+    //   delay(500);
+    // }
+
+    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+
+    if (buttonState == HIGH && lastButtonState == LOW) {
+      functionActive = false;
+      break;
+    }
+
+    lastButtonState = buttonState;
+
+    WiFiClient client = wi_server.available();
+
+    if (client) {
+
+      Serial.println("----------------------------");
+      Serial.println("WIFI - Cliente conectado");
+
+      boolean currentLineIsBlank = true;
+      String request = "";
+      String postData = "";
+      boolean isPost = false;
+      boolean isGet = false;
+      int contentLength = 0;
+
+      while (client.connected() && !client.available()) {
+        delay(1);
+      }
+
+      while (client.available()) {
+
+        char c = client.read();
+        Serial.write(c);
+        request += c;
+
+        if (request.endsWith("\r\n\r\n")) {
+          if (request.startsWith("POST")) {
+            isPost = true;
+          } else if (request.startsWith("GET")) {
+            isGet = true;
+          }
+          break;
+        }
+
+        if (request.indexOf("Content-Length: ") != -1) {
+          int pos = request.indexOf("Content-Length: ") + 16;
+          int endPos = request.indexOf("\r\n", pos);
+          String lengthStr = request.substring(pos, endPos);
+          contentLength = lengthStr.toInt();
+        }
+      }
+
+      if (isPost && contentLength > 0) {
+        while (postData.length() < contentLength && client.available()) {
+          char c = client.read();
+          postData += c;
+        }
+      }
+
+      if (isPost) {
+        handlePOSTWifi(client, postData);
+      } else if (isGet) {
+        handleGETWifi(client, request);
+      }
+
+      // handleRequestWifi(client, request);
+
+      delay(1);
+      client.stop();
+      Serial.println("----------------------------");
+    }
+  }
+}
+
+void modoUSB() {
+  lcd.setCursor(6, 1);
+  lcd.print("Modo USB");
+}
+
+void modoEthernet() {
+
+  lcd.setCursor(3, 1);
+  lcd.print("Modo Internet");
+
+  Ethernet.begin(mac, ip);
+
+  if (Ethernet.linkStatus() == LinkOFF) {
+    lcd.clear();
+    lcd.setCursor(0, 1);
+    lcd.print("Internet");
+    lcd.setCursor(0, 2);
+    lcd.print("Desconectado");
+  }
+
+  if (Ethernet.localIP() == IPAddress(0, 0, 0, 0)) {
+    lcd.clear();
+    lcd.setCursor(4, 1);
+    lcd.print("Sin Cable");
+    lcd.setCursor(7, 2);
+    lcd.print("de Red");
+    return;
+  }
+
+  server.begin();
+
+  delay(5000);
+  lcd.clear();
+
+  lcd.setCursor(4, 1);
+  lcd.print("IP Servidor");
+  lcd.setCursor(3, 2);
+  lcd.print(Ethernet.localIP());
+
+  while (functionActive) {
+
+    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+
+    if (buttonState == HIGH && lastButtonState == LOW) {
+      functionActive = false;
+      break;
+    }
+
+    lastButtonState = buttonState;
+
+    EthernetClient client = server.available();
+
+    if (client) {
+      Serial.println("----------------------------");
+      Serial.println("ETHERNET - Cliente conectado");
+
+      String request = "";
+      String postData = "";
+      boolean isPost = false;
+      boolean isGet = false;
+      int contentLength = 0;
+
+      while (client.connected() && !client.available()) {
+        delay(1);
+      }
+
+      while (client.available()) {
+        char c = client.read();
+        Serial.write(c);
+        request += c;
+
+        if (request.endsWith("\r\n\r\n")) {
+
+          if (request.startsWith("POST")) {
+            isPost = true;
+          } else if (request.startsWith("GET")) {
+            isGet = true;
+          }
+          break;
+        }
+
+        if (request.indexOf("Content-Length: ") != -1) {
+          int pos = request.indexOf("Content-Length: ") + 16;
+          int endPos = request.indexOf("\r\n", pos);
+          String lengthStr = request.substring(pos, endPos);
+          contentLength = lengthStr.toInt();
+        }
+
+        // if (request.startsWith("POST")) {
+        //   isPost = true;
+        // }
+
+        // int contentLengthIndex = request.indexOf("Content-Length: ");
+
+        // if (contentLengthIndex != -1) {
+        //   contentLengthIndex += 16;
+        //   int endOfContentLengthIndex = request.indexOf("\r\n", contentLengthIndex);
+        //   if (endOfContentLengthIndex != -1) {
+        //     String lengthStr = request.substring(contentLengthIndex, endOfContentLengthIndex);
+        //     contentLength = lengthStr.toInt();
+        //   }
+        // }
+
+        // break;
+      }
+
+      if (isPost && contentLength > 0) {
+        while (postData.length() < contentLength && client.available()) {
+          char c = client.read();
+          postData += c;
+        }
+      }
+
+      if (isPost) {
+        handlePOST(client, postData);
+      } else if (isGet) {
+        handleGET(client, request);
+      }
+
+      delay(1);
+      client.stop();
+      Serial.println("----------------------------");
+    }
+  }
+  //Ethernet.end();
+}
+
+// ---------------------------
+
+void handlePOST(EthernetClient& client, const String& postData) {
+  sendResponsePlain(client, "HTTP/1.1 200 OK", postData);
+}
+
+void handleGET(EthernetClient& client, const String& request) {
+  String response = "GET request received: " + request;
+  sendResponsePlain(client, "HTTP/1.1 200 OK", request);
+}
+
+void sendResponsePlain(EthernetClient& client, const String& status, const String& message) {
+  client.println(status);
+  client.println("Content-Type: text/plain");
+  client.println("Connection: close");
+  client.println();
+  client.println(message);
+}
+
+// ---------------------------
+
+void handlePOSTWifi(WiFiClient& client, const String& postData) {
+  sendResponsePlainWifi(client, "HTTP/1.1 200 OK", postData);
+}
+
+void handleGETWifi(WiFiClient& client, const String& request) {
+  String response = "GET request received: " + request;
+  sendResponsePlainWifi(client, "HTTP/1.1 200 OK", request);
+}
+
+void sendResponsePlainWifi(WiFiClient& client, const String& status, const String& message) {
+  client.println(status);
+  client.println("Content-Type: text/plain");
+  client.println("Connection: close");
+  client.println();
+  client.println(message);
+}
+
+
+// ---------------------------
+
+void handleRequest(EthernetClient& client, const String& request) {
+  // Analiza la solicitud para obtener el recurso solicitado
+  String resource = "/";
+  int start = request.indexOf("GET ") + 4;
+  int end = request.indexOf(" HTTP");
+  if (start != -1 && end != -1) {
+    resource = request.substring(start, end);
+  }
+
+  if (resource == "/") {
+    resource = "/index.html";
+  }
+
+  String fullPath = "/fs/nav" + resource;
+  FILE* file = fopen(fullPath.c_str(), "r");
+
+  if (!file) {
+    Serial.print("Error al abrir archivo: ");
+    Serial.println(fullPath);
+    sendResponse(client, "HTTP/1.1 404 Not Found", "File not found");
+    return;
+  }
+
+  // Determina el tipo de contenido
+  String contentType = "text/plain";
+  if (resource.endsWith(".html")) {
+    contentType = "text/html";
+  } else if (resource.endsWith(".css")) {
+    contentType = "text/css";
+  } else if (resource.endsWith(".js")) {
+    contentType = "application/javascript";
+  } else if (resource.endsWith(".png")) {
+    contentType = "image/png";
+  } else if (resource.endsWith(".jpg") || resource.endsWith(".jpeg")) {
+    contentType = "image/jpeg";
+  }
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: " + contentType);
+  client.println("Connection: close");
+  client.println();
+
+  char buffer[256];
+  while (fgets(buffer, sizeof(buffer), file) != NULL) {
+    client.print(buffer);
+  }
+
+  fclose(file);
+}
+
+void sendResponse(EthernetClient& client, const String& status, const String& message) {
+  client.println(status);
+  client.println(message);
+}
+
+void handleRequestWifi(WiFiClient& client, const String& request) {
+  // Analiza la solicitud para obtener el recurso solicitado
+  String resource = "/";
+  int start = request.indexOf("GET ") + 4;
+  int end = request.indexOf(" HTTP");
+  if (start != -1 && end != -1) {
+    resource = request.substring(start, end);
+  }
+
+  if (resource == "/") {
+    resource = "/index.html";
+  }
+
+  String fullPath = "/fs/nav" + resource;
+  FILE* file = fopen(fullPath.c_str(), "r");
+
+  if (!file) {
+    Serial.print("Error al abrir archivo: ");
+    Serial.println(fullPath);
+    sendResponseWifi(client, "HTTP/1.1 404 Not Found", "File not found");
+    return;
+  }
+
+  String contentType = "text/plain";
+  if (resource.endsWith(".html")) {
+    contentType = "text/html";
+  } else if (resource.endsWith(".css")) {
+    contentType = "text/css";
+  } else if (resource.endsWith(".js")) {
+    contentType = "application/javascript";
+  } else if (resource.endsWith(".png")) {
+    contentType = "image/png";
+  } else if (resource.endsWith(".jpg") || resource.endsWith(".jpeg")) {
+    contentType = "image/jpeg";
+  }
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: " + contentType);
+  client.println("Connection: close");
+  client.println();
+
+  char buffer[256];
+  while (fgets(buffer, sizeof(buffer), file) != NULL) {
+    client.print(buffer);
+  }
+
+  fclose(file);
+}
+
+void sendResponseWifi(WiFiClient& client, const String& status, const String& message) {
+  client.println(status);
+  // client.println("Content-Type: text/plain");
+  // client.println("Connection: close");
+  // client.println();
+  client.println(message);
+}
+
+
+// ---------------------------
+
+void printWifiStatus() {
+  // print the SSID of the network you're attached to:
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // print your board's IP address:
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  // print the received signal strength:
+  long rssi = WiFi.RSSI();
+  Serial.print("signal strength (RSSI):");
+  Serial.print(rssi);
+  Serial.println(" dBm");
+
+  Serial.print("To see this page in action, open a browser to http://");
+  Serial.println(ip);
+}
