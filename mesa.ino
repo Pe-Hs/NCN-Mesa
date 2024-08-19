@@ -219,8 +219,6 @@ void loop() {
       }
     }
   }
-
-  delay(100);
 }
 
 void controlManual_OG() {
@@ -319,6 +317,9 @@ void controlManual() {
 
   while (functionActive) {
 
+    unsigned long mytime;
+    mytime = micros();
+
     int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
 
     int potAmpValue = Breakout.analogRead(analogPins[potAmp]);
@@ -356,7 +357,6 @@ void controlManual() {
     if (!limitSwitchDetected) {
 
       moveSteps(stepsForAmplitude, freq_ang);
-
       // // clearRow(1, 4, "mm");
       // lcd.setCursor(1, 1);
       // lcd.print(amplitud_in);
@@ -417,21 +417,7 @@ void modoWifi() {
   lcd.print(ssid);
 
   while (functionActive) {
-
-    // int potSelValue = Breakout.analogRead(analogPins[potSel]);
-    // int select = map(potSelValue, POT_MIN, POT_MAX, 0, 3);
-
-    // // Modo WIFI = 1
-    // if (select != 1) {
-    //   functionActive = false;
-    //   //WiFi.disconnect();
-    //   lcd.clear();
-    //   lcd.setCursor(4, 1);
-    //   lcd.print("Funcion");
-    //   lcd.setCursor(5, 2);
-    //   lcd.print("Detenida");
-    //   delay(500);
-    // }
+    String sendPostData = "";
 
     int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
 
@@ -454,55 +440,100 @@ void modoWifi() {
       String postData = "";
       boolean isPost = false;
       boolean isGet = false;
+      bool headersEnded = false;
       int contentLength = 0;
+      int bytesRead = 0;
 
       while (client.connected() && !client.available()) {
         delay(1);
       }
 
       while (client.available()) {
-
         char c = client.read();
-        Serial.write(c);
         request += c;
 
         if (request.endsWith("\r\n\r\n")) {
-          if (request.startsWith("POST")) {
-            isPost = true;
-          } else if (request.startsWith("GET")) {
-            isGet = true;
+          headersEnded = true;
+          int index = request.indexOf("Content-Length:");
+          if (index != -1) {
+            contentLength = request.substring(index + 15).toInt();
           }
-          break;
         }
 
-        if (request.indexOf("Content-Length: ") != -1) {
-          int pos = request.indexOf("Content-Length: ") + 16;
-          int endPos = request.indexOf("\r\n", pos);
-          String lengthStr = request.substring(pos, endPos);
-          contentLength = lengthStr.toInt();
-        }
-      }
-
-      if (isPost && contentLength > 0) {
-        while (postData.length() < contentLength && client.available()) {
-          char c = client.read();
-          postData += c;
+        if (headersEnded) {
+          bytesRead++;
+          sendPostData += c;
+          if (bytesRead >= contentLength) {
+            break;
+          }
         }
       }
 
-      if (isPost) {
-        handlePOSTWifi(client, postData);
-      } else if (isGet) {
-        handleGETWifi(client, request);
-      }
-
-      // handleRequestWifi(client, request);
-
-      delay(1);
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-type:text/html");
+      client.println();
+      client.println(sendPostData);
       client.stop();
       Serial.println("----------------------------");
     }
+
+    if (sendPostData.startsWith("------WebKitFormBoundary") || sendPostData.indexOf("Content-Disposition: form-data") != -1) {
+      for (int i = 0; i < 5; i++) {
+        int newlineIndex = sendPostData.indexOf('\n');
+        if (newlineIndex == -1) {
+          return;
+        }
+        sendPostData = sendPostData.substring(newlineIndex + 1);
+      }
+
+      while (sendPostData.length() > 0) {
+        int newlineIndex = sendPostData.indexOf('\n');
+        String line;
+        if (newlineIndex != -1) {
+          line = sendPostData.substring(0, newlineIndex);
+          sendPostData = sendPostData.substring(newlineIndex + 1);
+        } else {
+          line = sendPostData;
+          sendPostData = "";
+        }
+
+        line.trim();
+
+        if (line.length() == 0) {
+          break;
+        }
+
+        int spaceIndex = line.indexOf(' ');
+
+        if (spaceIndex != -1) {
+          String timeString = line.substring(0, spaceIndex);
+          String valueString = line.substring(spaceIndex + 1);
+          timeString.trim();
+          valueString.trim();
+
+          float time = timeString.toFloat();
+          float value = valueString.toFloat();
+
+          mostrarData(time, value);
+        }
+      }
+
+    } else if (sendPostData.startsWith("{")) {
+      Serial.println(sendPostData);
+    }
   }
+}
+
+void mostrarData(float time, float dist) {
+  Serial.print("Tiempo: ");
+  Serial.print(time, 3);
+  Serial.print(" seg || Distancia: ");
+  Serial.println(dist, 4);
+  Serial.print(" cm || Velocidad: ");
+
+
+
+  Serial.println(dist, 4);
 }
 
 void modoUSB() {
@@ -838,7 +869,7 @@ void moveSteps(int steps, float frequency) {
 
   float pulseDelay_v = 1000000 / (vel * steps * 2);
 
-  // Movimiento hacia adelante
+
   Breakout.digitalWrite(pwmPins[dirPin], HIGH);
   for (int i = 0; i < pasossubida; i++) {
     if (checkLimitSwitch()) {
@@ -883,7 +914,6 @@ void moveSteps(int steps, float frequency) {
     vel = vel - dvb;
   }
 
-  // Movimiento hacia atrás
   Breakout.digitalWrite(pwmPins[dirPin], LOW);
   for (int i = 0; i < pasossubida; i++) {
     if (checkLimitSwitch()) {
@@ -928,7 +958,6 @@ void moveSteps(int steps, float frequency) {
     vel = vel - dvb;
   }
 
-  // Movimiento hacia atrás
   Breakout.digitalWrite(pwmPins[dirPin], LOW);
   for (int i = 0; i < pasossubida; i++) {
     if (checkLimitSwitch()) {
@@ -973,8 +1002,6 @@ void moveSteps(int steps, float frequency) {
     vel = vel - dvb;
   }
 
-
-  // Movimiento hacia adelante
   Breakout.digitalWrite(pwmPins[dirPin], HIGH);
   for (int i = 0; i < pasossubida; i++) {
     if (checkLimitSwitch()) {
@@ -1018,6 +1045,7 @@ void moveSteps(int steps, float frequency) {
 
     vel = vel - dvb;
   }
+  
 }
 
 // ------------------------------
@@ -1032,10 +1060,8 @@ void stopMotion() {
   functionActive = false;
   if (stop_pin_1 == 0 && stop_pin_2 == 1) {
     centrar();
-    return;
   } else if (stop_pin_1 == 1 && stop_pin_2 == 0) {
     centrar();
-    return;
   }
 }
 
