@@ -84,7 +84,7 @@ bool useEthe = false;                  // Control del uso del Servidor Ethernet
 float amplitude = 15.0;                          // Amplitud en mm
 float freq_ang = 0.16 * (2 * PI);                // Frecuencia (Velocidad Angular) 6 -> 2 * PI
 const float freq_ang_max = 3.0 * (2 * PI);       // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
-const float stepsPerMM = 50.0;                   // Paso por Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
+const float stepsPerMM = 10.0;                   // Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
 int stepsForAmplitude = amplitude * stepsPerMM;  // Pasos correspondientes a la amplitud
 const float distCentro = 25.0;                   // Distancia hacia el centro en mm
 int stepsToCenter = distCentro * stepsPerMM;     // Pasos hacia el centro
@@ -331,20 +331,12 @@ void controlManual() {
     freq_ang = frecuencia_in * 6.28;
     stepsForAmplitude = amplitud_in * stepsPerMM;
 
-    // clearRow(1, 4, "mm");
-    // lcd.setCursor(1, 1);
-    // lcd.print(amplitud_in);
-
-    // clearRow(3, 5, "Hz");
-    // lcd.setCursor(0, 3);
-    // lcd.print(frecuencia_in, 2);
-
     Serial.print("Amplitud: ");
     Serial.print(amplitud_in);
     Serial.print(" mm ");
     Serial.print(" Frecuencia: ");
-    Serial.println(frecuencia_in);
-    Serial.print(" Hz");
+    Serial.print(frecuencia_in);
+    Serial.println(" Hz");
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
@@ -354,16 +346,10 @@ void controlManual() {
 
     lastButtonState = buttonState;
 
+    bool dir = true;
+
     if (!limitSwitchDetected) {
-
       moveSteps(stepsForAmplitude, freq_ang);
-      // // clearRow(1, 4, "mm");
-      // lcd.setCursor(1, 1);
-      // lcd.print(amplitud_in);
-
-      // // clearRow(3, 5, "Hz");
-      // lcd.setCursor(0, 3);
-      // lcd.print(frecuencia_in, 2);
     }
   }
 }
@@ -435,7 +421,6 @@ void modoWifi() {
       Serial.println("----------------------------");
       Serial.println("WIFI - Cliente conectado");
 
-      boolean currentLineIsBlank = true;
       String request = "";
       String postData = "";
       boolean isPost = false;
@@ -528,12 +513,9 @@ void mostrarData(float time, float dist) {
   Serial.print("Tiempo: ");
   Serial.print(time, 3);
   Serial.print(" seg || Distancia: ");
-  Serial.println(dist, 4);
+  Serial.print(dist, 4);
   Serial.print(" cm || Velocidad: ");
-
-
-
-  Serial.println(dist, 4);
+  Serial.println("0.00");
 }
 
 void modoUSB() {
@@ -564,7 +546,6 @@ void modoEthernet() {
     lcd.print("de Red");
     return;
   }
-
   server.begin();
 
   delay(5000);
@@ -575,12 +556,11 @@ void modoEthernet() {
   lcd.setCursor(3, 2);
   lcd.print(Ethernet.localIP());
 
-
-
   while (functionActive) {
 
+    String sendPostData = "";
+
     int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
-    String procesPostData = "";
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
@@ -595,11 +575,17 @@ void modoEthernet() {
       Serial.println("----------------------------");
       Serial.println("ETHERNET - Cliente conectado");
 
+
       String request = "";
       String postData = "";
+
       boolean isPost = false;
       boolean isGet = false;
+      bool headersEnded = false;
       int contentLength = 0;
+
+      int bytesRead = 0;
+      int bytesReceived = 0;
 
       while (client.connected() && !client.available()) {
         delay(1);
@@ -607,74 +593,82 @@ void modoEthernet() {
 
       while (client.available()) {
         char c = client.read();
-        Serial.write(c);
         request += c;
 
         if (request.endsWith("\r\n\r\n")) {
-
-          if (request.startsWith("POST")) {
-            isPost = true;
-          } else if (request.startsWith("GET")) {
-            isGet = true;
+          headersEnded = true;
+          int index = request.indexOf("Content-Length:");
+          if (index != -1) {
+            contentLength = request.substring(index + 15).toInt();
           }
+        }
+
+
+
+        if (headersEnded) {
+          bytesRead++;
+          sendPostData += c;
+          if (bytesRead >= contentLength) {
+            break;
+          }
+        }
+      }
+
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-type:text/html");
+      client.println();
+      client.stop();
+      Serial.println("----------------------------");
+      lcd.setCursor(2, 3);
+      lcd.print("Datos Recibidos");
+    }
+
+    if (sendPostData.startsWith("------WebKitFormBoundary") || sendPostData.indexOf("Content-Disposition: form-data") != -1) {
+      for (int i = 0; i < 5; i++) {
+        int newlineIndex = sendPostData.indexOf('\n');
+        if (newlineIndex == -1) {
+          return;
+        }
+        sendPostData = sendPostData.substring(newlineIndex + 1);
+      }
+
+      while (sendPostData.length() > 0) {
+        int newlineIndex = sendPostData.indexOf('\n');
+        String line;
+        if (newlineIndex != -1) {
+          line = sendPostData.substring(0, newlineIndex);
+          sendPostData = sendPostData.substring(newlineIndex + 1);
+        } else {
+          line = sendPostData;
+          sendPostData = "";
+        }
+
+        line.trim();
+
+        if (line.length() == 0) {
           break;
         }
 
-        if (request.indexOf("Content-Length: ") != -1) {
-          int pos = request.indexOf("Content-Length: ") + 16;
-          int endPos = request.indexOf("\r\n", pos);
-          String lengthStr = request.substring(pos, endPos);
-          contentLength = lengthStr.toInt();
-        }
+        int spaceIndex = line.indexOf(' ');
 
-        // if (request.startsWith("POST")) {
-        //   isPost = true;
-        // }
+        if (spaceIndex != -1) {
+          String timeString = line.substring(0, spaceIndex);
+          String valueString = line.substring(spaceIndex + 1);
+          timeString.trim();
+          valueString.trim();
 
-        // int contentLengthIndex = request.indexOf("Content-Length: ");
+          float time = timeString.toFloat();
+          float value = valueString.toFloat();
 
-        // if (contentLengthIndex != -1) {
-        //   contentLengthIndex += 16;
-        //   int endOfContentLengthIndex = request.indexOf("\r\n", contentLengthIndex);
-        //   if (endOfContentLengthIndex != -1) {
-        //     String lengthStr = request.substring(contentLengthIndex, endOfContentLengthIndex);
-        //     contentLength = lengthStr.toInt();
-        //   }
-        // }
-
-        // break;
-      }
-
-      if (isPost && contentLength > 0) {
-        while (postData.length() < contentLength && client.available()) {
-          char c = client.read();
-          postData += c;
+          mostrarData(time, value);
         }
       }
 
-      if (isPost) {
-        procesPostData = postData;
-        newPostDetected = true;
-        // handlePOST(client, postData);
-      } else if (isGet) {
-        handleGET(client, request);
-      }
 
-      delay(1);
-      client.stop();
-      Serial.println("----------------------------");
-    }
-
-    if (isProcessing) {
-      processLoop(procesPostData);
-    } else if (newPostDetected) {
-      newPostDetected = false;
-      handlePOST(client, procesPostData);
+    } else if (sendPostData.startsWith("{")) {
+      Serial.println(sendPostData);
     }
   }
-
-
-  //Ethernet.end();
 }
 
 // ---------------------------
@@ -869,9 +863,8 @@ void moveSteps(int steps, float frequency) {
 
   float pulseDelay_v = 1000000 / (vel * steps * 2);
 
-
   Breakout.digitalWrite(pwmPins[dirPin], HIGH);
-  for (int i = 0; i < pasossubida; i++) {
+  for (int i = 1; i <= pasossubida; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -886,7 +879,7 @@ void moveSteps(int steps, float frequency) {
     vel = vel + dvs;
   }
 
-  for (int i = 0; i < pasosresto; i++) {
+  for (int i = 1; i <= pasosresto; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -899,7 +892,7 @@ void moveSteps(int steps, float frequency) {
     delayMicroseconds(pulseDelay_v);
   }
 
-  for (int i = 0; i < pasosbajada; i++) {
+  for (int i = 1; i <= pasosbajada; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -915,7 +908,7 @@ void moveSteps(int steps, float frequency) {
   }
 
   Breakout.digitalWrite(pwmPins[dirPin], LOW);
-  for (int i = 0; i < pasossubida; i++) {
+  for (int i = 1; i <= pasossubida; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -930,7 +923,7 @@ void moveSteps(int steps, float frequency) {
     vel = vel + dvs;
   }
 
-  for (int i = 0; i < pasosresto; i++) {
+  for (int i = 1; i <= pasosresto; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -943,7 +936,7 @@ void moveSteps(int steps, float frequency) {
     delayMicroseconds(pulseDelay_v);
   }
 
-  for (int i = 0; i < pasosbajada; i++) {
+  for (int i = 1; i <= pasosbajada; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -959,7 +952,7 @@ void moveSteps(int steps, float frequency) {
   }
 
   Breakout.digitalWrite(pwmPins[dirPin], LOW);
-  for (int i = 0; i < pasossubida; i++) {
+  for (int i = 1; i <= pasossubida; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -974,7 +967,7 @@ void moveSteps(int steps, float frequency) {
     vel = vel + dvs;
   }
 
-  for (int i = 0; i < pasosresto; i++) {
+  for (int i = 1; i <= pasosresto; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -987,7 +980,7 @@ void moveSteps(int steps, float frequency) {
     delayMicroseconds(pulseDelay_v);
   }
 
-  for (int i = 0; i < pasosbajada; i++) {
+  for (int i = 1; i <= pasosbajada; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -1003,7 +996,7 @@ void moveSteps(int steps, float frequency) {
   }
 
   Breakout.digitalWrite(pwmPins[dirPin], HIGH);
-  for (int i = 0; i < pasossubida; i++) {
+  for (int i = 1; i <= pasossubida; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -1018,7 +1011,7 @@ void moveSteps(int steps, float frequency) {
     vel = vel + dvs;
   }
 
-  for (int i = 0; i < pasosresto; i++) {
+  for (int i = 1; i <= pasosresto; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -1031,7 +1024,7 @@ void moveSteps(int steps, float frequency) {
     delayMicroseconds(pulseDelay_v);
   }
 
-  for (int i = 0; i < pasosbajada; i++) {
+  for (int i = 1; i <= pasosbajada; i++) {
     if (checkLimitSwitch()) {
       stopMotion();
       limitSwitchDetected = true;
@@ -1045,7 +1038,6 @@ void moveSteps(int steps, float frequency) {
 
     vel = vel - dvb;
   }
-  
 }
 
 // ------------------------------
