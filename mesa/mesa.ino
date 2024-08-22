@@ -152,13 +152,14 @@ void setup() {
   delay(2000);
   lcd.clear();
 
-  centrar();
+  //centrar();
 
   lcd.setCursor(5, 1);
   lcd.print("Seleccionar");
   lcd.setCursor(8, 2);
   lcd.print("Modo");
   delay(2000);
+  Serial.println("------");
 }
 
 
@@ -189,6 +190,7 @@ void loop() {
     unsigned long elapsedTime = millis() - countdownStartTime;
     unsigned long timeLeft = selectionDelay - elapsedTime;
 
+    Serial.println(getFunctionName(clickCount));
     lcd.setCursor(5, 1);
     lcd.print(getFunctionName(clickCount));
     lcd.setCursor(7, 2);
@@ -209,12 +211,15 @@ void loop() {
         controlManual();
       } else if (clickCount == 1) {
         lcd.clear();
+        Serial.println("WIFI");
         modoWifi();
       } else if (clickCount == 2) {
         lcd.clear();
+        Serial.println("USB");
         modoUSB();
       } else if (clickCount == 3) {
         lcd.clear();
+        Serial.println("UTP");
         modoEthernet();
       }
     }
@@ -546,6 +551,7 @@ void modoEthernet() {
     lcd.print("de Red");
     return;
   }
+
   server.begin();
 
   delay(5000);
@@ -617,8 +623,12 @@ void modoEthernet() {
       client.println("HTTP/1.1 200 OK");
       client.println("Content-type:text/html");
       client.println();
+      client.println("Datos Recibidos");
+
       client.stop();
+
       Serial.println("----------------------------");
+
       lcd.setCursor(2, 3);
       lcd.print("Datos Recibidos");
     }
@@ -664,9 +674,27 @@ void modoEthernet() {
         }
       }
 
+    } else if (sendPostData.startsWith("\n{")) {
+      sendPostData += "\n}";
 
-    } else if (sendPostData.startsWith("{")) {
-      Serial.println(sendPostData);
+      StaticJsonDocument<200> doc;
+      DeserializationError error = deserializeJson(doc, sendPostData);
+
+      if (error) {
+        return;
+      }
+
+      if ( !doc["amp"] || !doc["freq"]) {
+        return;
+      }
+
+      float amp = doc["amp"];
+      float freq = doc["freq"];
+
+      Serial.print("Amp: ");
+      Serial.print(amp);
+      Serial.print(" Freq: ");
+      Serial.println(freq);
     }
   }
 }
@@ -699,7 +727,7 @@ void processLoop(const String& postData) {
       while (client.available()) {
         char c = client.read();
         request += c;
-        if (request.endsWith("\r\n\r\n")) {
+          if (request.endsWith("\r\n\r\n")) {
           if (request.startsWith("POST")) {
             isProcessing = false;
             return;
