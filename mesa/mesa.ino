@@ -1,6 +1,5 @@
 #include <LiquidCrystal_I2C.h>
 #include <Arduino_PortentaBreakout.h>
-// #include <SharpDistSensor.h>
 
 #include <SPI.h>
 #include <stdlib.h>
