@@ -83,7 +83,7 @@ bool useEthe = false;                  // Control del uso del Servidor Ethernet
 float amplitude = 15.0;                          // Amplitud en mm
 float freq_ang = 0.16 * (2 * PI);                // Frecuencia (Velocidad Angular) 6 -> 2 * PI
 const float freq_ang_max = 3.0 * (2 * PI);       // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
-const float stepsPerMM = 10.0;                   // Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
+const float stepsPerMM = 50.0;                    // Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
 int stepsForAmplitude = amplitude * stepsPerMM;  // Pasos correspondientes a la amplitud
 const float distCentro = 25.0;                   // Distancia hacia el centro en mm
 int stepsToCenter = distCentro * stepsPerMM;     // Pasos hacia el centro
@@ -151,7 +151,7 @@ void setup() {
   delay(2000);
   lcd.clear();
 
-  //centrar();
+  centrar();
 
   lcd.setCursor(5, 1);
   lcd.print("Seleccionar");
@@ -163,6 +163,15 @@ void setup() {
 
 
 void loop() {
+  // int a = Breakout.digitalRead(pwmPins[limitSwitchPin_1]);
+
+  // int b = Breakout.digitalRead(pwmPins[limitSwitchPin_2]);
+
+  // Serial.print(a);
+  // Serial.print(" ---- ");
+  // Serial.println(b);
+
+  
 
   int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
 
@@ -358,13 +367,6 @@ void controlManual() {
   }
 }
 
-void clearRow(int row, int col, String und) {
-  lcd.setCursor(0, row);
-  lcd.print("                    ");
-  lcd.setCursor(col, row);
-  lcd.print(und);
-}
-
 void modoWifi() {
   WiFi.config(apIP, apGateway, apSubnet);  // Establecer IP WIFI server
 
@@ -425,13 +427,22 @@ void modoWifi() {
       Serial.println("----------------------------");
       Serial.println("WIFI - Cliente conectado");
 
+      lcd.setCursor(2, 3);
+      lcd.print("                    ");
+      lcd.setCursor(2, 3);
+      lcd.print("Inicio de Consulta");
+
       String request = "";
       String postData = "";
+
       boolean isPost = false;
       boolean isGet = false;
+
       bool headersEnded = false;
       int contentLength = 0;
+
       int bytesRead = 0;
+      int bytesReceived = 0;
 
       while (client.connected() && !client.available()) {
         delay(1);
@@ -443,6 +454,11 @@ void modoWifi() {
 
         if (request.endsWith("\r\n\r\n")) {
           headersEnded = true;
+          if (request.startsWith("POST")) {
+            isPost = true;
+          } else if (request.startsWith("GET")) {
+            isGet = true;
+          }
           int index = request.indexOf("Content-Length:");
           if (index != -1) {
             contentLength = request.substring(index + 15).toInt();
@@ -458,68 +474,25 @@ void modoWifi() {
         }
       }
 
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-type:text/html");
-      client.println();
-      client.println(sendPostData);
-      client.stop();
-      Serial.println("----------------------------");
-    }
-
-    if (sendPostData.startsWith("------WebKitFormBoundary") || sendPostData.indexOf("Content-Disposition: form-data") != -1) {
-      for (int i = 0; i < 5; i++) {
-        int newlineIndex = sendPostData.indexOf('\n');
-        if (newlineIndex == -1) {
-          return;
-        }
-        sendPostData = sendPostData.substring(newlineIndex + 1);
-      }
-
-      while (sendPostData.length() > 0) {
-        int newlineIndex = sendPostData.indexOf('\n');
-        String line;
-        if (newlineIndex != -1) {
-          line = sendPostData.substring(0, newlineIndex);
-          sendPostData = sendPostData.substring(newlineIndex + 1);
+      if (isPost) {
+        if (sendPostData.startsWith("\n{")) {
+          sendPostData += "\n}";
+          handlePOST(client, sendPostData);
         } else {
-          line = sendPostData;
-          sendPostData = "";
+          handlePOST(client, sendPostData);
         }
-
-        line.trim();
-
-        if (line.length() == 0) {
-          break;
-        }
-
-        int spaceIndex = line.indexOf(' ');
-
-        if (spaceIndex != -1) {
-          String timeString = line.substring(0, spaceIndex);
-          String valueString = line.substring(spaceIndex + 1);
-          timeString.trim();
-          valueString.trim();
-
-          float time = timeString.toFloat();
-          float value = valueString.toFloat();
-
-          mostrarData(time, value);
-        }
+      } else if (isGet) {
+        handleGET(client, request);
       }
 
-    } else if (sendPostData.startsWith("{")) {
-      Serial.println(sendPostData);
+      Serial.println("----------------------------");
+
+      lcd.setCursor(2, 3);
+      lcd.print("                    ");
+      lcd.setCursor(2, 3);
+      lcd.print("Datos Recibidos");
     }
   }
-}
-
-void mostrarData(float time, float dist) {
-  Serial.print("Tiempo: ");
-  Serial.print(time, 3);
-  Serial.print(" seg || Distancia: ");
-  Serial.print(dist, 4);
-  Serial.print(" cm || Velocidad: ");
-  Serial.println("0.00");
 }
 
 void modoUSB() {
@@ -556,9 +529,9 @@ void modoEthernet() {
   delay(5000);
   lcd.clear();
 
-  lcd.setCursor(4, 1);
+  lcd.setCursor(4, 0);
   lcd.print("IP Servidor");
-  lcd.setCursor(3, 2);
+  lcd.setCursor(3, 1);
   lcd.print(Ethernet.localIP());
 
   while (functionActive) {
@@ -579,13 +552,17 @@ void modoEthernet() {
     if (client) {
       Serial.println("----------------------------");
       Serial.println("ETHERNET - Cliente conectado");
-
+      lcd.setCursor(2, 3);
+      lcd.print("                    ");
+      lcd.setCursor(2, 3);
+      lcd.print("Inicio de Consulta");
 
       String request = "";
       String postData = "";
 
       boolean isPost = false;
       boolean isGet = false;
+
       bool headersEnded = false;
       int contentLength = 0;
 
@@ -602,13 +579,16 @@ void modoEthernet() {
 
         if (request.endsWith("\r\n\r\n")) {
           headersEnded = true;
+          if (request.startsWith("POST")) {
+            isPost = true;
+          } else if (request.startsWith("GET")) {
+            isGet = true;
+          }
           int index = request.indexOf("Content-Length:");
           if (index != -1) {
             contentLength = request.substring(index + 15).toInt();
           }
         }
-
-
 
         if (headersEnded) {
           bytesRead++;
@@ -619,86 +599,44 @@ void modoEthernet() {
         }
       }
 
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-type:text/html");
-      client.println();
-      client.println("Datos Recibidos");
-
-      client.stop();
+      if (isPost) {
+        if (sendPostData.startsWith("\n{")) {
+          sendPostData += "\n}";
+          handlePOST(client, sendPostData);
+        } else {
+          handlePOST(client, sendPostData);
+        }
+      } else if (isGet) {
+        handleGET(client, request);
+      }
 
       Serial.println("----------------------------");
 
       lcd.setCursor(2, 3);
+      lcd.print("                    ");
+      lcd.setCursor(2, 3);
       lcd.print("Datos Recibidos");
-    }
-
-    if (sendPostData.startsWith("------WebKitFormBoundary") || sendPostData.indexOf("Content-Disposition: form-data") != -1) {
-      for (int i = 0; i < 5; i++) {
-        int newlineIndex = sendPostData.indexOf('\n');
-        if (newlineIndex == -1) {
-          return;
-        }
-        sendPostData = sendPostData.substring(newlineIndex + 1);
-      }
-
-      while (sendPostData.length() > 0) {
-        int newlineIndex = sendPostData.indexOf('\n');
-        String line;
-        if (newlineIndex != -1) {
-          line = sendPostData.substring(0, newlineIndex);
-          sendPostData = sendPostData.substring(newlineIndex + 1);
-        } else {
-          line = sendPostData;
-          sendPostData = "";
-        }
-
-        line.trim();
-
-        if (line.length() == 0) {
-          break;
-        }
-
-        int spaceIndex = line.indexOf(' ');
-
-        if (spaceIndex != -1) {
-          String timeString = line.substring(0, spaceIndex);
-          String valueString = line.substring(spaceIndex + 1);
-          timeString.trim();
-          valueString.trim();
-
-          float time = timeString.toFloat();
-          float value = valueString.toFloat();
-
-          mostrarData(time, value);
-        }
-      }
-
-    } else if (sendPostData.startsWith("\n{")) {
-      sendPostData += "\n}";
-
-      StaticJsonDocument<200> doc;
-      DeserializationError error = deserializeJson(doc, sendPostData);
-
-      if (error) {
-        return;
-      }
-
-      if ( !doc["amp"] || !doc["freq"]) {
-        return;
-      }
-
-      float amp = doc["amp"];
-      float freq = doc["freq"];
-
-      Serial.print("Amp: ");
-      Serial.print(amp);
-      Serial.print(" Freq: ");
-      Serial.println(freq);
     }
   }
 }
 
 // ---------------------------
+
+void clearRow(int row, int col, String und) {
+  lcd.setCursor(0, row);
+  lcd.print("                    ");
+  lcd.setCursor(col, row);
+  lcd.print(und);
+}
+
+void mostrarData(float time, float dist) {
+  Serial.print("Tiempo: ");
+  Serial.print(time, 3);
+  Serial.print(" seg || Distancia: ");
+  Serial.print(dist, 4);
+  Serial.print(" cm || Velocidad: ");
+  Serial.println("0.00");
+}
 
 void processLoop(const String& postData) {
   while (isProcessing) {
@@ -726,7 +664,7 @@ void processLoop(const String& postData) {
       while (client.available()) {
         char c = client.read();
         request += c;
-          if (request.endsWith("\r\n\r\n")) {
+        if (request.endsWith("\r\n\r\n")) {
           if (request.startsWith("POST")) {
             isProcessing = false;
             return;
@@ -739,16 +677,123 @@ void processLoop(const String& postData) {
   }
 }
 
-void handlePOST(EthernetClient& client, const String& postData) {
-  sendResponsePlain(client, "HTTP/1.1 200 OK", postData);
+void handlePOST(Client& client, const String& postData) {
+  sendResponsePlain(client, "HTTP/1.1 200 OK", "Datos Recibidos Correctamente");  // postData
+
+  if (postData.startsWith("------WebKitFormBoundary") || postData.indexOf("Content-Disposition: form-data") != -1) {
+    String newPost = postData;
+
+    for (int i = 0; i < 5; i++) {
+      int newlineIndex = newPost.indexOf('\n');
+      if (newlineIndex == -1) {
+        return;
+      }
+      newPost = newPost.substring(newlineIndex + 1);
+    }
+
+    while (newPost.length() > 0) {
+      int newlineIndex = newPost.indexOf('\n');
+      String line;
+      if (newlineIndex != -1) {
+        line = newPost.substring(0, newlineIndex);
+        newPost = newPost.substring(newlineIndex + 1);
+      } else {
+        line = newPost;
+        newPost = "";
+      }
+
+      line.trim();
+
+      if (line.length() == 0) {
+        break;
+      }
+
+      int spaceIndex = line.indexOf(' ');
+
+      if (spaceIndex != -1) {
+        String timeString = line.substring(0, spaceIndex);
+        String valueString = line.substring(spaceIndex + 1);
+        timeString.trim();
+        valueString.trim();
+
+        float time = timeString.toFloat();
+        float value = valueString.toFloat();
+
+        mostrarData(time, value);
+      }
+    }
+
+  } else if (postData.startsWith("\n{")) {
+
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, postData);
+
+    if (error) {
+      return;
+    }
+
+    if (doc["amp"] || doc["freq"]) {
+      float amp = doc["amp"];
+      float freq = doc["freq"];
+
+      Serial.print("Amp: ");
+      Serial.print(amp);
+      Serial.print(" Freq: ");
+      Serial.println(freq);
+
+      return;
+    }
+
+    if (doc["filename"]) {
+      String filename = doc["filename"];
+      Serial.print("Filenmae Selected: ");
+      Serial.println(filename);
+
+      return;
+    }
+  }
 }
 
-void handleGET(EthernetClient& client, const String& request) {
-  String response = "GET request received: " + request;
-  sendResponsePlain(client, "HTTP/1.1 200 OK", request);
+void handleGET(Client& client, const String& request) {
+
+  String response = "";
+
+  DIR* dir;
+  struct dirent* ent;
+  int dirIndex = 0;
+
+  DynamicJsonDocument doc(1024);
+  JsonArray filesArray = doc.to<JsonArray>();
+
+  if ((dir = opendir("/fs")) != NULL) {
+    while ((ent = readdir(dir)) != NULL) {
+      if (strstr(ent->d_name, ".txt") != NULL) {
+        filesArray.add(ent->d_name);
+        dirIndex++;
+      }
+    }
+    closedir(dir);
+  } else {
+    lcd.setCursor(2, 3);
+    lcd.print("                    ");
+    lcd.setCursor(4, 3);
+    lcd.print("Error al Leer");
+    while (1)
+      ;
+  }
+  if (dirIndex == 0) {
+    lcd.setCursor(2, 3);
+    lcd.print("                    ");
+    lcd.setCursor(2, 3);
+    lcd.print("No hay Archivos");
+  }
+
+  serializeJson(doc, response);
+
+  sendResponsePlain(client, "HTTP/1.1 200 OK", response);
 }
 
-void sendResponsePlain(EthernetClient& client, const String& status, const String& message) {
+void sendResponsePlain(Client& client, const String& status, const String& message) {
   client.println(status);
   client.println("Content-Type: text/plain");
   client.println("Connection: close");
@@ -758,26 +803,7 @@ void sendResponsePlain(EthernetClient& client, const String& status, const Strin
   requestPending = true;
 }
 
-// ---------------------------
-
-void handlePOSTWifi(WiFiClient& client, const String& postData) {
-  sendResponsePlainWifi(client, "HTTP/1.1 200 OK", postData);
-}
-
-void handleGETWifi(WiFiClient& client, const String& request) {
-  String response = "GET request received: " + request;
-  sendResponsePlainWifi(client, "HTTP/1.1 200 OK", request);
-}
-
-void sendResponsePlainWifi(WiFiClient& client, const String& status, const String& message) {
-  client.println(status);
-  client.println("Content-Type: text/plain");
-  client.println("Connection: close");
-  client.println();
-  client.println(message);
-}
-
-// ------------------------------
+// ----------------------------------------------------------------------------------------
 
 void moveSteps_OG(int steps, float frequency, bool direction) {
   long pasossubida, pasosbajada, pasosresto;
