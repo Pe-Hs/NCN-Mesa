@@ -14,11 +14,14 @@
 #include "mbed.h"
 #include "platform/mbed_retarget.h"
 
-LiquidCrystal_I2C lcd(0x27, 20, 4);  // 0x3f or 0x27
 
 // Configuración de la tarjeta SD
 SDMMCBlockDevice sd;
 mbed::FATFileSystem fs("fs");
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ---------------------------------------------------------------
 
 // CONEXION ETHERNET
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
@@ -37,31 +40,52 @@ IPAddress apGateway(192, 168, 1, 1);   // Puerta de enlace
 IPAddress apSubnet(255, 255, 255, 0);  // Máscara de subred
 WiFiServer wi_server(80);
 
-// PINES DE PORTENTA BREAKOUT
+// ----------------------------------------------------------------
+
 breakoutPin pwmPins[] = { PWM0, PWM1, PWM2, PWM3, PWM4, PWM5, PWM6, PWM7, PWM8, PWM9 };
 breakoutPin analogPins[] = { ANALOG_A0, ANALOG_A1, ANALOG_A2, ANALOG_A3, ANALOG_A4, ANALOG_A5, ANALOG_A6, ANALOG_A7 };
 breakoutPin gpioPins[] = { GPIO_0, GPIO_1, GPIO_2, GPIO_3, GPIO_4, GPIO_5, GPIO_6 };
 
-// DEFINIR VALOR MIN Y MAX DEL POTENCIOMETRO 10K
-#define POT_MIN 0
-#define POT_MAX 1023
-
-// PINES MOTOR
 byte dirPin = 7;
 byte stepPin = 8;
 byte freePin = 9;
 
-// PINES CONTROL MANUAL MOTOR
 byte potAmp = 7;
 byte potFre = 6;
-
-//PIN DE CONTROL
-byte btnSel = 5;
 
 byte limitSwitchPin_1 = 4;
 byte limitSwitchPin_2 = 3;
 
-//VARIABLES SELECCION MODO
+byte SwitchPin = 5;
+
+int VUELTAS = 3;
+int PASOS = 500;                       // Numero de pasos del driver del motor
+int MMXVUELTA = 10;                    // mm de avance por revolucion
+int psubida = 30;                      // Porcentaje de subida
+int pbajada = 30;                      // Porcentaje de bajada
+int vo = 60;                           // Velocidad de inicio maximo
+float dvs, dvb;                        // Segmentos de subida y bajada
+int SwitchStatus = 0;                  // Estado del switch, defecto manual 0
+int screen1 = 0, screen2 = 0;          // Modos de pantalla en LCD
+long p_speed, p_dist;                  // Valores de perillas de velocidad y distancia
+float TotalLen = VUELTAS * MMXVUELTA;  // Longitud total en mm del equipo
+long s_left, s_right;                  // Sensores de fin de carrera
+int leefile = 0;                       // Indicador de lectura de archivos en MicroSD
+float p = 0;                           // Punto temporal de seÃ±al
+int h_max, h_min, resol = 5;           // Altura minimo y maximo del sensor
+int pasocentro = 10;                   // MM de paso para recentrar
+int totalpc = 0, Maxtotalpc = 6;       // Maxima iteracion para buscar el centro  ---* NO SE USA
+int flagmitad = 0;                     // Controla inicar con la mitad de recorrido al inicio
+float m_dist_old = 0, mmsin = 0.5;     // Distancia antigua para correr la mitad y resolucion de diferencias
+
+//File myFile;    // Variable archivo del sismo
+String cadena;  // Cadena para mensajes en pantalla
+// ----------------------------------------------------------------------------------------------------------
+
+const float distCentro = 25.0;              // Distancia hacia el centro en mm
+int stepsToCenter = distCentro * 50;        // Pasos hacia el centro
+const float freq_ang_max = 3.0 * (2 * PI);  // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
+
 const unsigned long selectionDelay = 5000;  // Tiempo de espera  (5 segundos)
 
 int buttonState = 0;
@@ -75,28 +99,10 @@ unsigned long clickStartTime;      // Tiempo de inicio del clic
 bool isCountingDown = false;           // Bandera para saber si el conteo regresivo está en marcha
 unsigned long countdownStartTime = 0;  // Tiempo en el que comenzo el conteo regresivo
 bool functionActive = false;           // Bandera para saber si la funcion está activa
-bool useWiFi = false;                  // Control del uso del Servidor WIFI
-bool useEthe = false;                  // Control del uso del Servidor Ethernet
-
-// VARIABLES MOTOR
-// Parámetros del movimiento
-float amplitude = 15.0;                          // Amplitud en mm
-float freq_ang = 0.16 * (2 * PI);                // Frecuencia (Velocidad Angular) 6 -> 2 * PI
-const float freq_ang_max = 3.0 * (2 * PI);       // Frecuencia max (Velocidad Angular) 6 -> 2 * PI
-const float stepsPerMM = 50.0;                   // Pasos por Revolucion (500 -> 360/0.72*) / 10 mm (distancia recorrida en una revolucion)
-int stepsForAmplitude = amplitude * stepsPerMM;  // Pasos correspondientes a la amplitud
-const float distCentro = 25.0;                   // Distancia hacia el centro en mm
-int stepsToCenter = distCentro * stepsPerMM;     // Pasos hacia el centro
-
-bool limitSwitchDetected = false;
-
-float dvs, dvb;  // Segmentos de subida y bajada
-int h_max, h_min;
 
 // Variables de estado
 bool isProcessing = false;
-bool requestPending = false;
-bool newPostDetected = false;
+bool stopRequestReceived = false;  // Bandera global
 
 String getFunctionName(int select) {
   switch (select) {
@@ -111,10 +117,21 @@ String getFunctionName(int select) {
 void setup() {
   Serial.begin(9600);
 
+  //Pines del stepper motor
+  pinMode(pwmPins[dirPin], OUTPUT);
+  pinMode(pwmPins[stepPin], OUTPUT);
+  pinMode(pwmPins[freePin], OUTPUT);
+
+  Breakout.digitalWrite(pwmPins[freePin], HIGH);
+
+  pinMode(pwmPins[SwitchPin], INPUT_PULLUP);
+
+  pinMode(pwmPins[limitSwitchPin_1], INPUT_PULLUP);
+  pinMode(pwmPins[limitSwitchPin_2], INPUT_PULLUP);
+
   lcd.init();
   lcd.backlight();
 
-  // Inicializa la tarjeta SD
   int err = sd.init();
 
   if (err) {
@@ -133,38 +150,23 @@ void setup() {
     }
   }
 
-  pinMode(pwmPins[btnSel], INPUT);
-  startTime = millis();
+  // cadena = String();
 
-  pinMode(pwmPins[dirPin], OUTPUT);
-  pinMode(pwmPins[stepPin], OUTPUT);
-  pinMode(pwmPins[freePin], OUTPUT);
-
-  pinMode(pwmPins[limitSwitchPin_1], INPUT_PULLUP);
-  pinMode(pwmPins[limitSwitchPin_2], INPUT_PULLUP);
-
-  Breakout.digitalWrite(pwmPins[freePin], HIGH);
-
-  lcd.setCursor(5, 1);
-  lcd.print("Powered By NCN!");
-
+  pantalla("MESA VIBRADORA", "PROPIEDAD DE");
   delay(2000);
-  lcd.clear();
+  pantalla("NUEVO CONTROL", "EIRL");
+  delay(3000);
+  pantalla("www.ncn.pe", "informes@ncn.pe");
+  delay(3000);
 
+  pantalla("Centrando la", "plataforma ...");
+  // totalpc = 0;
   //centrar();
-
-  lcd.setCursor(5, 1);
-  lcd.print("Seleccionar");
-  lcd.setCursor(8, 2);
-  lcd.print("Modo");
-  delay(2000);
-  Serial.println("------");
 }
 
-
+// Funcion loop del programa
 void loop() {
-
-  int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+  int buttonState = Breakout.digitalRead(pwmPins[SwitchPin]);
 
   if (buttonState == HIGH && lastButtonState == LOW) {
     clickCount++;
@@ -206,8 +208,7 @@ void loop() {
 
       if (clickCount == 0) {
         lcd.clear();
-        limitSwitchDetected = false;
-        controlManual();
+        modomanual();
       } else if (clickCount == 1) {
         lcd.clear();
         Serial.println("WIFI");
@@ -215,7 +216,6 @@ void loop() {
       } else if (clickCount == 2) {
         lcd.clear();
         Serial.println("USB");
-        modoUSB();
       } else if (clickCount == 3) {
         lcd.clear();
         Serial.println("UTP");
@@ -225,39 +225,15 @@ void loop() {
   }
 }
 
-void controlManual() {
+// --------------------------------------------------------
 
-  lcd.setCursor(0, 0);
-  lcd.print("Amplitud: ");
-  lcd.setCursor(4, 1);
-  lcd.print("mm");
-  lcd.setCursor(0, 2);
-  lcd.print("Frecuencia: ");
-  lcd.setCursor(7, 3);
-  lcd.print("Hz");
+void modomanual() {
+  float frec, myv, m_dist, max_velo, m_speed;
+  unsigned long mytime;
 
   while (functionActive) {
 
-    unsigned long mytime;
-    mytime = micros();
-
-    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
-
-    int potAmpValue = Breakout.analogRead(analogPins[potAmp]);
-    int potFreValue = Breakout.analogRead(analogPins[potFre]);
-
-    int amplitud_in = map(potAmpValue, 0, POT_MAX, 0, 50);
-    float frecuencia_in = (potFreValue / 1023.0) * 5.0;
-
-    freq_ang = frecuencia_in * 6.28;
-    stepsForAmplitude = amplitud_in * stepsPerMM;
-
-    Serial.print("Amplitud: ");
-    Serial.print(amplitud_in);
-    Serial.print(" mm ");
-    Serial.print(" Frecuencia: ");
-    Serial.print(frecuencia_in);
-    Serial.println(" Hz");
+    int buttonState = Breakout.digitalRead(pwmPins[SwitchPin]);
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
@@ -267,17 +243,25 @@ void controlManual() {
 
     lastButtonState = buttonState;
 
-    bool dir = true;
+    mytime = micros();
+    p_dist = Breakout.analogRead(analogPins[potAmp]);   // analogRead(A0);   // Distancia analoga de perilla
+    p_speed = Breakout.analogRead(analogPins[potFre]);  // analogRead(A1);  // Velocidad analoga de perilla
 
-    if (!limitSwitchDetected) {
-      moveSteps(stepsForAmplitude, freq_ang);
+    m_dist = mapf(p_dist, 30, 1015, 0, TotalLen);
+    max_velo = getMaxVel(m_dist);  // Extrae velocidad maxima segun distancia a recorrer
+    m_speed = mapf(p_speed, 20, 1015, 0, max_velo);
+
+    if (m_dist > 0) {
+      RunSin(m_dist, m_speed);
+      mytime = micros() - mytime;
+      frec = 1000000.0 / mytime;
+      pantalla("Dist: " + String(m_dist, 2) + "mm", "Frec: " + String(frec, 2) + "Hz");
+    } else {
+      flagmitad = 0;
+      pantalla("Dist: 00.00mm", "Frec: 00.00Hz");
+      delay(500);
     }
   }
-}
-
-void modoUSB() {
-  lcd.setCursor(6, 1);
-  lcd.print("Modo USB");
 }
 
 void modoWifi() {
@@ -324,7 +308,7 @@ void modoWifi() {
   while (functionActive) {
     String sendPostData = "";
 
-    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+    int buttonState = Breakout.digitalRead(pwmPins[SwitchPin]);
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
@@ -388,6 +372,11 @@ void modoWifi() {
       }
 
       if (isPost) {
+
+        if (isProcessing) {
+          stopRequestReceived = true;
+        }
+
         if (sendPostData.startsWith("\n{")) {
           sendPostData += "\n}";
           handlePOST(client, sendPostData);
@@ -446,7 +435,7 @@ void modoEthernet() {
 
     String sendPostData = "";
 
-    int buttonState = Breakout.digitalRead(pwmPins[btnSel]);
+    int buttonState = Breakout.digitalRead(pwmPins[SwitchPin]);
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
@@ -508,6 +497,11 @@ void modoEthernet() {
       }
 
       if (isPost) {
+
+        if (isProcessing) {
+          stopRequestReceived = true;
+        }
+
         if (sendPostData.startsWith("\n{")) {
           sendPostData += "\n}";
           handlePOST(client, sendPostData);
@@ -528,64 +522,7 @@ void modoEthernet() {
   }
 }
 
-// ---------------------------
-
-void clearRow(int row, int col, String und) {
-  lcd.setCursor(0, row);
-  lcd.print("                    ");
-  lcd.setCursor(col, row);
-  lcd.print(und);
-}
-
-void mostrarData(float time, float dist) {
-  Serial.print("Tiempo: ");
-  Serial.print(time, 3);
-  Serial.print(" seg || Distancia: ");
-  Serial.print(dist, 4);
-  Serial.print(" cm || Velocidad: ");
-  Serial.println("0.00");
-}
-
-void processLoop(const String& postData) {
-  while (isProcessing) {
-
-    StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, postData);
-
-    if (error) {
-      return;
-    }
-
-    float amp = doc["amp"];
-    float freq = doc["freq"];
-
-    freq_ang = freq * (2 * PI);
-
-    stepsForAmplitude = amp * stepsPerMM;
-
-    moveSteps(stepsForAmplitude, freq_ang);
-
-    EthernetClient client = server.available();
-
-    if (client) {
-      String request = "";
-      while (client.available()) {
-        char c = client.read();
-        request += c;
-        if (request.endsWith("\r\n\r\n")) {
-          if (request.startsWith("POST")) {
-            isProcessing = false;
-            return;
-          }
-          break;
-        }
-      }
-      client.stop();
-    }
-  }
-}
-
-// ---------------------------
+// --------------------------------------------------------
 
 void handlePOST(Client& client, const String& postData) {
 
@@ -613,7 +550,7 @@ void handlePOST(Client& client, const String& postData) {
 
     String filePath = "/fs/" + content_filename;
 
-    FILE* file = fopen(filePath.c_str(), "wb");
+    FILE* file = fopen(filePath.c_str(), "ab");
 
     if (file) {
       fwrite(newPost.c_str(), 1, newPost.length(), file);
@@ -623,59 +560,24 @@ void handlePOST(Client& client, const String& postData) {
       sendResponsePlain(client, "HTTP/1.1 500 Internal Server Error", "Error al escribir el archivo");
     }
 
-    // while (newPost.length() > 0) {
-    //   int newlineIndex = newPost.indexOf('\n');
-    //   String line;
-    //   if (newlineIndex != -1) {
-    //     line = newPost.substring(0, newlineIndex);
-    //     newPost = newPost.substring(newlineIndex + 1);
-    //   } else {
-    //     line = newPost;
-    //     newPost = "";
-    //   }
-
-    //   line.trim();
-
-    //   if (line.length() == 0) {
-    //     break;
-    //   }
-
-    //   int spaceIndex = line.indexOf(' ');
-
-    //   if (spaceIndex != -1) {
-    //     String timeString = line.substring(0, spaceIndex);
-    //     String valueString = line.substring(spaceIndex + 1);
-    //     timeString.trim();
-    //     valueString.trim();
-
-    //     float time = timeString.toFloat();
-    //     float value = valueString.toFloat();
-
-    //     mostrarData(time, value);
-    //   }
-    // }
-
   } else if (postData.startsWith("\n{")) {
 
     StaticJsonDocument<200> doc;
     DeserializationError error = deserializeJson(doc, postData);
 
     if (error) {
-      sendResponsePlain(client, "HTTP/1.1 200 OK", "Datos Recibidos Correctamente");  // postData
+      sendResponsePlain(client, "HTTP/1.1 200 OK", "Datos Recibidos Correctamente");
       return;
     }
 
     if (doc["amp"] && doc["freq"]) {
+
       float amp = doc["amp"];
       float freq = doc["freq"];
 
-      Serial.print("Amp: ");
-      Serial.print(amp);
-      Serial.print(" Freq: ");
-      Serial.println(freq);
-
-      sendResponsePlain(client, "HTTP/1.1 200 OK", "Datos Recibidos Correctamente");  // postData
-
+      sendResponsePlain(client, "HTTP/1.1 200 OK", "Datos Recibidos Correctamente");
+      isProcessing = true;
+      processLoop(client, amp, freq);
       return;
     }
 
@@ -722,6 +624,18 @@ void handlePOST(Client& client, const String& postData) {
       sendResponsePlain(client, "HTTP/1.1 200 OK", "Archivos Escritos");
 
       fclose(file);
+    }
+
+    if (doc["filename"] && doc["action"]) {
+      String filename = doc["filename"];
+      String action = doc["action"];
+      String filePath = "/fs/" + filename;
+
+      if (remove(filePath.c_str()) == 0 && action == "delete") {
+        sendResponsePlain(client, "HTTP/1.1 200 OK", "Archivo Borrado");
+      } else {
+        sendResponsePlain(client, "HTTP/1.1 500 Internal Server Error", "Error al Borrar Archivo");
+      }
     }
   }
 }
@@ -792,11 +706,9 @@ void sendResponsePlain(Client& client, const String& status, const String& messa
   client.println("Connection: close");
   client.println();
   client.println(message);
-  isProcessing = true;
-  requestPending = true;
 }
 
-// ----------------------------
+// --------------------------------------------------------
 
 String extractFilename(String contentDisposition) {
   String searchStr = "filename=\"";
@@ -815,243 +727,216 @@ String extractFilename(String contentDisposition) {
   return contentDisposition.substring(startIndex, endIndex);
 }
 
-// ----------------------------------------------------------------------------------------
+void processLoop(Client& client, float amplitud, float velocidad) {
+  float frec, myv, m_dist, max_velo, m_speed;
+  unsigned long mytime;
+  unsigned long lastCheckTime = millis();
 
-void moveSteps(int steps, float frequency) {
+  while (isProcessing) {
+
+    if (millis() - lastCheckTime >= 100) {
+      lastCheckTime = millis();
+
+      EthernetClient newEthernetClient = server.available();
+      if (newEthernetClient) {
+        isProcessing = false;
+        //client.stop();
+        return;
+      }
+
+      WiFiClient newWiFiClient = wi_server.available();
+      if (newWiFiClient) {
+        isProcessing = false;
+        //client.stop();
+        return;
+      }
+    }
+
+    int buttonState = Breakout.digitalRead(pwmPins[SwitchPin]);
+
+    if (buttonState == HIGH && lastButtonState == LOW) {
+      isProcessing = false;
+      lcd.setCursor(0, 2);
+      lcd.print("                    ");
+      centrar();
+      return;
+    }
+
+    lastButtonState = buttonState;
+
+    mytime = micros();
+    p_dist = amplitud;
+    p_speed = velocidad;
+
+    m_dist = mapf(p_dist, 30, 1015, 0, TotalLen);
+    max_velo = getMaxVel(m_dist);
+    m_speed = mapf(p_speed, 20, 1015, 0, max_velo);
+
+    if (m_dist > 0) {
+      RunSin(m_dist, m_speed);
+      mytime = micros() - mytime;
+      frec = 1000000.0 / mytime;
+      pantalla_loop(String(m_dist, 2) + "mm", String(frec, 2) + "Hz");
+    } else {
+      flagmitad = 0;
+      pantalla_loop("00.00mm ", " 00.00Hz");
+      delay(500);
+    }
+  }
+}
+
+// --------------------------------------------------------
+
+// Funcion RunSin que hace movimiento de ida y vuelta
+void RunSin(float dist, int v) {
+  float tmp_dist, o_tmp_dist, v_dist;
+
+  tmp_dist = abs(dist - m_dist_old);
+  //Serial.println("resol:"+String(tmp_dist));
+  if (tmp_dist > mmsin) {
+    o_tmp_dist = m_dist_old / 2.0;
+    m_dist_old = dist;
+    tmp_dist = dist / 2.0;
+    if (flagmitad == 0) {
+      avanza(tmp_dist, 10, 1);
+      flagmitad = 1;
+    } else {
+      v_dist = o_tmp_dist + tmp_dist;
+      avanza(v_dist, v, 1);
+    }
+  } else
+    avanza(dist, v, 1);
+  delay(10);
+  avanza(-1.0 * dist, v, 1);
+  delay(10);
+}
+
+// Funcion que ejecuta una seÃ±al de sismo
+void RunSismo(float mydesp, float myvelo) {
+  float newdesp;
+  newdesp = mydesp - p;
+  avanza(newdesp, myvelo, 1);
+  p = mydesp;
+}
+
+// Funcion de avance de carro a una distancia y velocidad especifica
+// Con aceleracion y desaceleracion
+void avanza(float dist, float velocidad, int seg) {
+  long pasostotales = abs(dist) * PASOS / MMXVUELTA;
   long pasossubida, pasosbajada, pasosresto;
+  int i, op = 0;
   float vel;
 
-  if (frequency > freq_ang_max) {
-    pasossubida = 30 * steps / 100.0;
-    pasosbajada = 30 * steps / 100.0;
-    pasosresto = steps - pasossubida - pasosbajada;
-    dvs = (frequency - freq_ang_max) / pasossubida;
-    dvb = (frequency - freq_ang_max) / pasosbajada;
-    vel = freq_ang_max;
-  } else {
-    pasossubida = 0;
-    pasosbajada = 0;
-    pasosresto = steps;
-    dvs = 0;
-    dvb = 0;
-    vel = frequency;
+  // Chequea sensores de fin de carrera por seguridad solo si seg = 1
+  if (seg == 1) {
+    // s_left = analogRead(A2);
+    s_left = Breakout.digitalRead(pwmPins[limitSwitchPin_1]);
+    //Serial.println("Iz:"+String(s_left));
+    if (s_left == 0) {
+      pantalla("ERROR #001", "Limite riel 1");
+      delay(4000);
+      reposicion();
+      op = 1;
+    }
+    //s_right = analogRead(A3);
+    s_right = Breakout.digitalRead(pwmPins[limitSwitchPin_2]);
+    //Serial.println("De:"+String(s_right));
+    if (s_right == 0) {
+      pantalla("ERROR #002", "Limite riel 2");
+      delay(4000);
+      reposicion();
+      op = 1;
+    }
   }
+  //Determina direccion del movimiento + o -
+  if (op == 0) {
+    if (dist > 0)
+      Breakout.digitalWrite(pwmPins[dirPin], HIGH);
+    else
+      Breakout.digitalWrite(pwmPins[dirPin], LOW);
 
-  float pulseDelay_v = 1000000 / (vel * steps * 2);
-
-  Breakout.digitalWrite(pwmPins[dirPin], HIGH);
-  for (int i = 1; i <= pasossubida; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
+    //Determina variacion de velocidad
+    if (velocidad > vo) {
+      //Determinacion de pasos de aceleracion y desaceleracion
+      pasossubida = psubida * pasostotales / 100.0;
+      pasosbajada = pbajada * pasostotales / 100.0;
+      pasosresto = pasostotales - pasossubida - pasosbajada;
+      dvs = (velocidad - vo) / pasossubida;
+      dvb = (velocidad - vo) / pasosbajada;
+      vel = vo;
+    } else {
+      pasossubida = 0;
+      pasosbajada = 0;
+      pasosresto = pasostotales;
+      dvs = 0;
+      dvb = 0;
+      vel = velocidad;
     }
 
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel + dvs;
-  }
-
-  for (int i = 1; i <= pasosresto; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
+    //Aceleracion del motor
+    for (i = 1; i <= pasossubida; i++) {
+      step(vel);
+      //Serial.println(velocidad);
+      vel = vel + dvs;
     }
 
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-  }
-
-  for (int i = 1; i <= pasosbajada; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
+    //Velocidad constante
+    for (i = 1; i <= pasosresto; i++) {
+      step(vel);
+      //Serial.println(velocidad);
     }
 
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel - dvb;
-  }
-
-  Breakout.digitalWrite(pwmPins[dirPin], LOW);
-  for (int i = 1; i <= pasossubida; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
+    //Desaceleracion del motor
+    for (i = 1; i <= pasosbajada; i++) {
+      step(vel);
+      //Serial.println(velocidad);
+      vel = vel - dvb;
     }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel + dvs;
-  }
-
-  for (int i = 1; i <= pasosresto; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-  }
-
-  for (int i = 1; i <= pasosbajada; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel - dvb;
-  }
-
-  Breakout.digitalWrite(pwmPins[dirPin], LOW);
-  for (int i = 1; i <= pasossubida; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel + dvs;
-  }
-
-  for (int i = 1; i <= pasosresto; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-  }
-
-  for (int i = 1; i <= pasosbajada; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel - dvb;
-  }
-
-  Breakout.digitalWrite(pwmPins[dirPin], HIGH);
-  for (int i = 1; i <= pasossubida; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel + dvs;
-  }
-
-  for (int i = 1; i <= pasosresto; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-  }
-
-  for (int i = 1; i <= pasosbajada; i++) {
-    if (checkLimitSwitch()) {
-      stopMotion();
-      limitSwitchDetected = true;
-      return;
-    }
-
-    Breakout.digitalWrite(pwmPins[stepPin], HIGH);
-    delayMicroseconds(pulseDelay_v);
-    Breakout.digitalWrite(pwmPins[stepPin], LOW);
-    delayMicroseconds(pulseDelay_v);
-
-    vel = vel - dvb;
   }
 }
 
-// ------------------------------
-
-bool checkLimitSwitch() {
-  return Breakout.digitalRead(pwmPins[limitSwitchPin_1]) == 0 || digitalRead(pwmPins[limitSwitchPin_2]) == 0;
+// Funcion que da un paso a una velocidad especifica
+void step(long speed) {
+  int stepDelay = 1000000 * MMXVUELTA / (2 * PASOS * speed);
+  Breakout.digitalWrite(pwmPins[stepPin], HIGH);
+  delayMicroseconds(stepDelay);
+  Breakout.digitalWrite(pwmPins[stepPin], LOW);
+  delayMicroseconds(stepDelay);
 }
 
-void stopMotion() {
-  int stop_pin_1 = Breakout.digitalRead(pwmPins[limitSwitchPin_1]);
-  int stop_pin_2 = Breakout.digitalRead(pwmPins[limitSwitchPin_2]);
-  functionActive = false;
-  if (stop_pin_1 == 0 && stop_pin_2 == 1) {
-    centrar();
-  } else if (stop_pin_1 == 1 && stop_pin_2 == 0) {
-    centrar();
-  }
+// Funcion que muestra en pantalla un mensaje
+void pantalla(String msg1, String msg2) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(msg1);
+  lcd.setCursor(0, 1);
+  lcd.print(msg2);
 }
 
+void pantalla_loop(String msg1, String msg2) {
+  lcd.setCursor(0, 2);
+  lcd.print("                    ");
+  lcd.setCursor(2, 2);
+  lcd.print(msg1);
+  lcd.setCursor(11, 2);
+  lcd.print(msg2);
+}
+
+// Funcion que lee distancia de sensor
 float distancia(int n) {
   long suma = 0;
   for (int i = 0; i < n; i++) {
     suma = suma + Breakout.analogRead(analogPins[5]);
   }
   float adc = suma / n;
-  //float distancia_mm = pow(30274.0 / adc, 1.2134);
+  // float distancia_mm = pow(30274.0 / adc, 1.2134);
   return (adc);
 }
 
+//Escanea centro
 void centrar() {
   int h1, h2, H, tope = 0;
   bool dir = true;
-
-  lcd.clear();
-  lcd.setCursor(5, 1);
-  lcd.print("Centrando");
-  lcd.setCursor(7, 2);
-  lcd.print("Mesa");
 
   int delay = 500;
 
@@ -1079,7 +964,7 @@ void centrar() {
 
   // 0 -> derecha || 1 -> izquierda
 
-  move(3000, 0.85, dir);
+  move(2500, 0.85, dir);
 
   do {
     h2 = distancia(20);
@@ -1104,16 +989,81 @@ void centrar() {
   } while (h2 < 580);
 
   move(stepsToCenter, 0.3, dir);
-
-  limitSwitchDetected = false;
-  functionActive = true;
-
-  lcd.clear();
-  lcd.setCursor(5, 1);
-  lcd.print("Seleccionar");
-  lcd.setCursor(8, 2);
-  lcd.print("Modo");
 }
+
+// Funcion de mapeo de valor flotante
+double mapf(double val, double in_min, double in_max, double out_min, double out_max) {
+  return (val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// Funcion que calcula la velocidad maxima permitida segun el desplazamiento
+float getMaxVel(float dist) {
+  float y = (0.00159962) * pow(dist, 3) - 0.41303215 * pow(dist, 2) + 20.83780711 * dist + 103.82640002;
+  return y;
+}
+
+// Funcion que reposiciona la mesa al inicio
+void reposicion() {
+  pantalla("Reposicionando", "plataforma ...");
+  centrar();
+  delay(1000);
+}
+
+// Funcion de modo de operacion por computadora
+// void modocomputadora() {
+//   float segundos, mydesp, myvelo;  // Desplazamiento y velocidad
+//   char mdesp[8], mvelo[8];         // Variables para convertir cadenas a numeros
+//   int i = 0;
+//   unsigned long mytime;
+
+//   if (leefile == 0) {
+//     pantalla("Iniciando", "memoria interna");
+//     if (!SD.begin(53)) {
+//       pantalla("ERROR #003", "En MicroSD");
+//       return;
+//     }
+//     pantalla("Inicio exitoso", "abriendo archivo");
+//     myFile = SD.open("test.txt");
+//     delay(100);  // Una pausa para acceder al MicroSD
+//     mytime = micros();
+//     if (myFile) {
+//       pantalla("Leyendo datos", "desde archivo");
+//       pantalla("Reproduciendo", "registro sismico");
+//       while (myFile.available()) {
+//         leelinea(mdesp);
+//         mydesp = atof(mdesp);
+//         leelinea(mvelo);
+//         myvelo = atof(mvelo);
+
+//         RunSismo(mydesp, myvelo);
+//         i++;
+//       }
+//       myFile.close();
+//       segundos = (micros() - mytime) / 1000000.0;
+//       leefile = 1;
+//     } else {
+//       pantalla("ERROR #004", "Abrir archivo");
+//     }
+//   }
+// }
+
+// String leelinea(char o[8]) {
+//   char c;
+//   int i = 0, t = 1;
+//   o[0] = '\x0';
+//   do {
+//     c = myFile.read();
+//     if (c != ',' && c != '\n') {
+//       o[i] = c;
+//       i++;
+//     } else {
+//       o[i] = '\x0';
+//       t = 0;
+//       break;
+//     }
+//   } while (t);
+//   return o;
+// }
 
 void move(int steps, float frequency, bool direction) {
   long pasossubida, pasosbajada, pasosresto;
