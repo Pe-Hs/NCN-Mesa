@@ -152,16 +152,28 @@ void setup() {
 
   // cadena = String();
 
-  pantalla("MESA VIBRADORA", "PROPIEDAD DE");
+  centrar_texto(1, "MESA VIBRADORA");
+  centrar_texto(2, "PROPIEDAD DE");
   delay(2000);
-  pantalla("NUEVO CONTROL", "EIRL");
-  delay(3000);
-  pantalla("www.ncn.pe", "informes@ncn.pe");
-  delay(3000);
+  lcd.clear();
 
-  pantalla("Centrando la", "plataforma ...");
-  // totalpc = 0;
-  //centrar();
+  centrar_texto(1, "NUEVO CONTROL");
+  centrar_texto(2, "EIRL");
+  delay(3000);
+  lcd.clear();
+
+  centrar_texto(1, "www.ncn.pe");
+  centrar_texto(2, "informes@ncn.pe");
+  delay(3000);
+  lcd.clear();
+
+  centrar_texto(1, "CENTRANDO LA");
+  centrar_texto(2, "PLATAFORMA");
+  centrar();
+
+  lcd.clear();
+  centrar_texto(1, "Seleccionar");
+  centrar_texto(2, "Modo");
 }
 
 // Funcion loop del programa
@@ -228,7 +240,7 @@ void loop() {
 // --------------------------------------------------------
 
 void modomanual() {
-  float frec, myv, m_dist, max_velo, m_speed;
+  float frec, myv, m_dist, max_velo, m_speed, n_p_dist, n_p_speed;
   unsigned long mytime;
 
   while (functionActive) {
@@ -237,7 +249,13 @@ void modomanual() {
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
+      lcd.clear();
+      centrar_texto(1, "Deteniendo");
+      centrar_texto(2, "Modo");
       centrar();
+      lcd.clear();
+      centrar_texto(1, "Seleccionar");
+      centrar_texto(2, "Modo");
       break;
     }
 
@@ -247,11 +265,20 @@ void modomanual() {
     p_dist = Breakout.analogRead(analogPins[potAmp]);   // analogRead(A0);   // Distancia analoga de perilla
     p_speed = Breakout.analogRead(analogPins[potFre]);  // analogRead(A1);  // Velocidad analoga de perilla
 
-    m_dist = mapf(p_dist, 30, 1015, 0, TotalLen);
-    max_velo = getMaxVel(m_dist);  // Extrae velocidad maxima segun distancia a recorrer
-    m_speed = mapf(p_speed, 20, 1015, 0, max_velo);
+    n_p_dist = reduce_noise(p_dist, 100);
+    n_p_speed = reduce_noise(p_speed, 100);
 
-    if (m_dist > 0) {
+    m_dist = mapf(int(n_p_dist), 30, 1015, 0, TotalLen);
+    max_velo = getMaxVel(m_dist);  // Extrae velocidad maxima segun distancia a recorrer
+    m_speed = mapf(int(n_p_speed), 20, 1015, 0, max_velo);
+    Serial.print(p_dist);
+    Serial.print(" ----- ");
+    Serial.print(n_p_dist);
+    Serial.print(" ----- ");
+    Serial.print(m_speed);
+    Serial.print(" ----- ");
+    Serial.println(max_velo);
+    if (m_dist > 0 && m_speed > 0) {
       RunSin(m_dist, m_speed);
       mytime = micros() - mytime;
       frec = 1000000.0 / mytime;
@@ -922,11 +949,30 @@ void pantalla_loop(String msg1, String msg2) {
   lcd.print(msg2);
 }
 
+void centrar_texto(int fila, String texto) {
+  int largoTexto = texto.length();
+  int columnasLCD = 20;
+  int espacio = (columnasLCD - largoTexto) / 2;
+
+  lcd.setCursor(espacio, fila);
+  lcd.print(texto);
+}
+
 // Funcion que lee distancia de sensor
 float distancia(int n) {
   long suma = 0;
   for (int i = 0; i < n; i++) {
     suma = suma + Breakout.analogRead(analogPins[5]);
+  }
+  float adc = suma / n;
+  // float distancia_mm = pow(30274.0 / adc, 1.2134);
+  return (adc);
+}
+
+float reduce_noise(int value, int n) {
+  long suma = 0;
+  for (int i = 0; i < n; i++) {
+    suma = suma + value;
   }
   float adc = suma / n;
   // float distancia_mm = pow(30274.0 / adc, 1.2134);
