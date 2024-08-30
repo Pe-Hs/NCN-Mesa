@@ -239,6 +239,16 @@ void loop() {
 
 // --------------------------------------------------------
 
+bool c_amp = true;
+
+int adc_filtrado = 0;
+int adc_raw = 0;
+float alpha = 0.05;
+
+float band_pass(int analog, int filtro) {
+  return alpha * analog + ((1 - alpha) * filtro);
+}
+
 void modomanual() {
   float frec, myv, m_dist, max_velo, m_speed, n_p_dist, n_p_speed;
   unsigned long mytime;
@@ -249,6 +259,7 @@ void modomanual() {
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       functionActive = false;
+      flagmitad = 0;
       lcd.clear();
       centrar_texto(1, "Deteniendo");
       centrar_texto(2, "Modo");
@@ -265,21 +276,21 @@ void modomanual() {
     p_dist = Breakout.analogRead(analogPins[potAmp]);   // analogRead(A0);   // Distancia analoga de perilla
     p_speed = Breakout.analogRead(analogPins[potFre]);  // analogRead(A1);  // Velocidad analoga de perilla
 
-    n_p_dist = reduce_noise(p_dist, 100);
-    n_p_speed = reduce_noise(p_speed, 100);
+    n_p_dist = band_pass(p_dist, n_p_dist);
+    n_p_speed = band_pass(p_speed, n_p_speed);
+
+    Serial.print(n_p_dist);
+    Serial.println(n_p_speed);
 
     m_dist = mapf(int(n_p_dist), 30, 1015, 0, TotalLen);
     max_velo = getMaxVel(m_dist);  // Extrae velocidad maxima segun distancia a recorrer
     m_speed = mapf(int(n_p_speed), 20, 1015, 0, max_velo);
-    Serial.print(p_dist);
-    Serial.print(" ----- ");
-    Serial.print(n_p_dist);
-    Serial.print(" ----- ");
-    Serial.print(m_speed);
-    Serial.print(" ----- ");
-    Serial.println(max_velo);
-    if (m_dist > 0 && m_speed > 0) {
-      RunSin(m_dist, m_speed);
+
+    Serial.println(m_dist);
+
+    if (m_dist > 0) {
+      RunSin(m_dist, m_speed, c_amp);
+      c_amp = !c_amp;
       mytime = micros() - mytime;
       frec = 1000000.0 / mytime;
       pantalla("Dist: " + String(m_dist, 2) + "mm", "Frec: " + String(frec, 2) + "Hz");
@@ -783,6 +794,7 @@ void processLoop(Client& client, float amplitud, float velocidad) {
 
     if (buttonState == HIGH && lastButtonState == LOW) {
       isProcessing = false;
+      flagmitad = 0;
       lcd.setCursor(0, 2);
       lcd.print("                    ");
       centrar();
@@ -800,7 +812,8 @@ void processLoop(Client& client, float amplitud, float velocidad) {
     m_speed = mapf(p_speed, 20, 1015, 0, max_velo);
 
     if (m_dist > 0) {
-      RunSin(m_dist, m_speed);
+      RunSin(m_dist, m_speed, c_amp);
+      c_amp = !c_amp;
       mytime = micros() - mytime;
       frec = 1000000.0 / mytime;
       pantalla_loop(String(m_dist, 2) + "mm", String(frec, 2) + "Hz");
@@ -815,11 +828,11 @@ void processLoop(Client& client, float amplitud, float velocidad) {
 // --------------------------------------------------------
 
 // Funcion RunSin que hace movimiento de ida y vuelta
-void RunSin(float dist, int v) {
-  float tmp_dist, o_tmp_dist, v_dist;
+void RunSin(float dist, int v, bool neg) {
+  float tmp_dist, o_tmp_dist, v_dist, neg_val;
 
   tmp_dist = abs(dist - m_dist_old);
-  //Serial.println("resol:"+String(tmp_dist));
+
   if (tmp_dist > mmsin) {
     o_tmp_dist = m_dist_old / 2.0;
     m_dist_old = dist;
@@ -831,8 +844,9 @@ void RunSin(float dist, int v) {
       v_dist = o_tmp_dist + tmp_dist;
       avanza(v_dist, v, 1);
     }
-  } else
+  } else {
     avanza(dist, v, 1);
+  }
   delay(10);
   avanza(-1.0 * dist, v, 1);
   delay(10);
@@ -863,7 +877,7 @@ void avanza(float dist, float velocidad, int seg) {
       pantalla("ERROR #001", "Limite riel 1");
       delay(4000);
       reposicion();
-      op = 1;
+      //op = 1;
     }
     //s_right = analogRead(A3);
     s_right = Breakout.digitalRead(pwmPins[limitSwitchPin_2]);
@@ -872,7 +886,7 @@ void avanza(float dist, float velocidad, int seg) {
       pantalla("ERROR #002", "Limite riel 2");
       delay(4000);
       reposicion();
-      op = 1;
+      //op = 1;
     }
   }
   //Determina direccion del movimiento + o -
