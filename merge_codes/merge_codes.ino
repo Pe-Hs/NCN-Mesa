@@ -14,6 +14,7 @@
 #include "mbed.h"
 #include "platform/mbed_retarget.h"
 
+#include <Buzzer.h>
 
 // Configuración de la tarjeta SD
 SDMMCBlockDevice sd;
@@ -57,6 +58,8 @@ byte limitSwitchPin_1 = 4;
 byte limitSwitchPin_2 = 3;
 
 byte SwitchPin = 5;
+
+Buzzer buzzer(pwmPins[0]);
 
 int VUELTAS = 3;
 int PASOS = 500;                       // Numero de pasos del driver del motor
@@ -116,7 +119,6 @@ String getFunctionName(int select) {
 
 void setup() {
   Serial.begin(9600);
-
   //Pines del stepper motor
   pinMode(pwmPins[dirPin], OUTPUT);
   pinMode(pwmPins[stepPin], OUTPUT);
@@ -131,6 +133,8 @@ void setup() {
 
   lcd.init();
   lcd.backlight();
+
+  initBuzzer();
 
   int err = sd.init();
 
@@ -169,7 +173,8 @@ void setup() {
 
   centrar_texto(1, "CENTRANDO LA");
   centrar_texto(2, "PLATAFORMA");
-  centrar();
+
+  //centrar();
 
   lcd.clear();
   centrar_texto(1, "Seleccionar");
@@ -247,6 +252,17 @@ float alpha = 0.05;
 
 float band_pass(int analog, int filtro) {
   return alpha * analog + ((1 - alpha) * filtro);
+}
+
+void initBuzzer() {
+  buzzer.begin(10);
+
+  buzzer.sound(NOTE_C4, 500);
+  buzzer.sound(NOTE_E4, 500);
+  buzzer.sound(NOTE_G4, 500);
+  buzzer.sound(NOTE_C5, 500);
+
+  buzzer.end(2000);
 }
 
 void modomanual() {
@@ -487,7 +503,7 @@ void modoEthernet() {
     if (client) {
       Serial.println("----------------------------");
       Serial.println("ETHERNET - Cliente conectado");
-      lcd.setCursor(2, 3);
+      lcd.setCursor(0, 3);
       lcd.print("                    ");
       lcd.setCursor(1, 3);
       lcd.print("Inicio de Consulta");
@@ -552,7 +568,7 @@ void modoEthernet() {
 
       Serial.println("----------------------------");
 
-      lcd.setCursor(2, 3);
+      lcd.setCursor(0, 3);
       lcd.print("                    ");
       lcd.setCursor(2, 3);
       lcd.print("Datos Recibidos");
@@ -719,7 +735,7 @@ void handleGET(Client& client, const String& request) {
     }
     closedir(dir);
   } else {
-    lcd.setCursor(2, 3);
+    lcd.setCursor(0, 3);
     lcd.print("                    ");
     lcd.setCursor(4, 3);
     lcd.print("Error al Leer");
@@ -727,7 +743,7 @@ void handleGET(Client& client, const String& request) {
       ;
   }
   if (dirIndex == 0) {
-    lcd.setCursor(2, 3);
+    lcd.setCursor(0, 3);
     lcd.print("                    ");
     lcd.setCursor(2, 3);
     lcd.print("No hay Archivos");
@@ -760,7 +776,7 @@ String extractFilename(String contentDisposition) {
 
   if (endIndex == -1) {
     return "";
-  }
+  }ghv
 
   return contentDisposition.substring(startIndex, endIndex);
 }
