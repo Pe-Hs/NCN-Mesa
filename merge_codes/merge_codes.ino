@@ -667,17 +667,37 @@ void handlePOST(Client& client, const String& postData) {
       return;
     }
 
-    if (doc["filename"] && doc["file"]) {
+    if (doc["filename"] && doc["sism"]) {
       String filename = doc["filename"];
       String filePath = "/fs/" + filename;
-
-      FILE* file = fopen(filePath.c_str(), "wb");
-
-      fwrite(postData.c_str(), 1, postData.length(), file);
-
+      centrar_texto(2, "Simulacion Iniciada");
+      FILE* file = fopen(filePath.c_str(), "r");
+      // fwrite(postData.c_str(), 1, postData.length(), file);
       sendResponsePlain(client, "HTTP/1.1 200 OK", "Archivos Escritos");
+      isProcessing = true;
 
-      fclose(file);
+      if (file != NULL) {
+        char line[100];
+        char t_ime[20], d_ist[20], v_el[20];
+        float vel, dist;
+        while (fgets(line, sizeof(line), file)) {
+          if (sscanf(line, "%s %s %s", t_ime, d_ist, v_el) == 3) {
+
+            vel = atof(v_el);
+            dist = atof(d_ist);
+
+            RunSismo(dist, vel);
+          }
+        }
+        fclose(file);
+
+        lcd.setCursor(0, 2);
+        lcd.print("                    ");
+        centrar_texto(2, "Simulacion Terminada");
+        delay(2000);
+        lcd.setCursor(0, 2);
+        lcd.print("                    ");
+      }
     }
 
     if (doc["filename"] && doc["action"]) {
@@ -776,7 +796,7 @@ String extractFilename(String contentDisposition) {
 
   if (endIndex == -1) {
     return "";
-  }ghv
+  }
 
   return contentDisposition.substring(startIndex, endIndex);
 }
@@ -1084,62 +1104,6 @@ void reposicion() {
   centrar();
   delay(1000);
 }
-
-// Funcion de modo de operacion por computadora
-// void modocomputadora() {
-//   float segundos, mydesp, myvelo;  // Desplazamiento y velocidad
-//   char mdesp[8], mvelo[8];         // Variables para convertir cadenas a numeros
-//   int i = 0;
-//   unsigned long mytime;
-
-//   if (leefile == 0) {
-//     pantalla("Iniciando", "memoria interna");
-//     if (!SD.begin(53)) {
-//       pantalla("ERROR #003", "En MicroSD");
-//       return;
-//     }
-//     pantalla("Inicio exitoso", "abriendo archivo");
-//     myFile = SD.open("test.txt");
-//     delay(100);  // Una pausa para acceder al MicroSD
-//     mytime = micros();
-//     if (myFile) {
-//       pantalla("Leyendo datos", "desde archivo");
-//       pantalla("Reproduciendo", "registro sismico");
-//       while (myFile.available()) {
-//         leelinea(mdesp);
-//         mydesp = atof(mdesp);
-//         leelinea(mvelo);
-//         myvelo = atof(mvelo);
-
-//         RunSismo(mydesp, myvelo);
-//         i++;
-//       }
-//       myFile.close();
-//       segundos = (micros() - mytime) / 1000000.0;
-//       leefile = 1;
-//     } else {
-//       pantalla("ERROR #004", "Abrir archivo");
-//     }
-//   }
-// }
-
-// String leelinea(char o[8]) {
-//   char c;
-//   int i = 0, t = 1;
-//   o[0] = '\x0';
-//   do {
-//     c = myFile.read();
-//     if (c != ',' && c != '\n') {
-//       o[i] = c;
-//       i++;
-//     } else {
-//       o[i] = '\x0';
-//       t = 0;
-//       break;
-//     }
-//   } while (t);
-//   return o;
-// }
 
 void move(int steps, float frequency, bool direction) {
   long pasossubida, pasosbajada, pasosresto;
